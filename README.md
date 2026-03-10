@@ -38,8 +38,11 @@ Building a production-grade transaction monitoring system to demonstrate:
 
 **Week 1: Foundation**
 
+### Days 1-5
+
 - Set up repo structure
-- Set up AWS account (Enabled MFA on Root account, Created IAM user with admin access, Created AWS budget alert (1$), Created CloudWatch billing alarm)
+- Set up AWS account (Enabled MFA on Root account, Created IAM user with admin access, Created AWS budget alert ($1), Created CloudWatch billing alarm)
+- Set up AWS CLI locally
 
 ---
 
