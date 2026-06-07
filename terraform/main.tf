@@ -38,10 +38,10 @@ provider "aws" {
 
 # Transactions table - stores all transaction records
 resource "aws_dynamodb_table" "transactions" {
-  name           = "${var.project_name}-transactions-${var.environment}"
-  billing_mode   = "PAY_PER_REQUEST" # Cost-optimized for variable workloads
-  hash_key       = "transaction_id"
-  range_key      = "timestamp"
+  name         = "${var.project_name}-transactions-${var.environment}"
+  billing_mode = "PAY_PER_REQUEST" # Cost-optimized for variable workloads
+  hash_key     = "transaction_id"
+  range_key    = "timestamp"
 
   attribute {
     name = "transaction_id"
@@ -146,10 +146,10 @@ resource "aws_dynamodb_table" "fraud_alerts" {
 # Main transaction processing queue
 resource "aws_sqs_queue" "transaction_queue" {
   name                       = "${var.project_name}-transactions-${var.environment}"
-  visibility_timeout_seconds = 300 # 5 minutes (6x Lambda timeout)
+  visibility_timeout_seconds = 300     # 5 minutes (6x Lambda timeout)
   message_retention_seconds  = 1209600 # 14 days
-  receive_wait_time_seconds  = 20 # Long polling
-  
+  receive_wait_time_seconds  = 20      # Long polling
+
   # Enable dead-letter queue
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.transaction_dlq.arn
@@ -235,6 +235,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "transaction_logs" {
   rule {
     id     = "archive-old-logs"
     status = "Enabled"
+
+    filter {}
 
     transition {
       days          = 90
