@@ -46,4 +46,23 @@ Building a production-grade transaction monitoring system to demonstrate:
 
 ---
 
+**Week 2: Infrastructure as Code**
+
+### Days 6-10
+
+- Wrote Terraform configuration covering the full AWS stack:
+ - DynamoDB tables (transaction storage)
+ - SQS queues (event ingestion pipeline)
+ - S3 buckets (data archival /Lambda deployment packages)
+ - API Gateway (RESTful transaction endpoints)
+ - Lambda function stubs (placeholder handlers, ready for business logic)
+ - CloudWatch alarms & X-Ray tracing (observability layer)
+ - IAM roles & policies (least-privilege access)
+- Successfully applied infrastrucutre to AWS Console
+- Implementing data generator (synthetic transaction stream)
+
+---
+
+
+
 **Note:** This is a portfolio project demonstrating cloud architecture and data engineering skills for the Toronto fintech market.
