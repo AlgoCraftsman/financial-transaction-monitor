@@ -451,6 +451,52 @@ resource "aws_cloudwatch_log_group" "fraud_detector" {
 }
 
 # ============================================================================
+# Lambda Functions
+# ============================================================================
+
+resource "aws_lambda_function" "transaction_processor" {
+  function_name = "${var.project_name}-transaction-processor-${var.environment}"
+  role          = aws_iam_role.transaction_processor_lambda.arn
+  runtime       = var.lambda_runtime
+  handler       = "transaction_processor.lambda_handler"
+  filename      = "${path.module}/../lambda-functions/transaction_processor.zip"
+  timeout       = var.transaction_processor_timeout
+  memory_size   = var.transaction_processor_memory
+
+  tracing_config {
+    mode = var.enable_xray_tracing ? "Active" : "PassThrough"
+  }
+
+  environment {
+    variables = {
+      TRANSACTIONS_TABLE             = aws_dynamodb_table.transactions.name
+      FRAUD_ALERT_QUEUE_URL          = aws_sqs_queue.fraud_alert_queue.url
+      S3_BUCKET                      = aws_s3_bucket.transaction_logs.bucket
+      FRAUD_RISK_THRESHOLD           = var.fraud_risk_threshold
+      VELOCITY_WINDOW_MINUTES        = var.velocity_check_window_minutes
+      MAX_TRANSACTIONS_PER_WINDOW    = var.max_transactions_per_window
+      SUSPICIOUS_AMOUNT_THRESHOLD    = var.suspicious_amount_threshold
+      ENVIRONMENT                    = var.environment
+    }
+  }
+
+  depends_on = [
+    aws_cloudwatch_log_group.transaction_processor
+  ]
+
+  tags = {
+    Name = "${var.project_name}-transaction-processor"
+  }
+}
+
+resource "aws_lambda_event_source_mapping" "transaction_processor_sqs" {
+  event_source_arn        = aws_sqs_queue.transaction_queue.arn
+  function_name           = aws_lambda_function.transaction_processor.arn
+  batch_size              = 10
+  function_response_types = ["ReportBatchItemFailures"]
+}
+
+# ============================================================================
 # Data Sources
 # ============================================================================
 
