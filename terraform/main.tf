@@ -1,20 +1,22 @@
-
-
 terraform {
   required_version = ">= 1.6"
 
   required_providers {
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.4"
+    }
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
   }
 
-  # Uncomment and configure for remote state management
+  # Recommended for shared environments:
   # backend "s3" {
-  #   bucket         = "terraform-state-bucket"
-  #   key            = "transaction-monitoring/terraform.tfstate"
-  #   region         = "us-east-2"
+  #   bucket         = "your-terraform-state-bucket"
+  #   key            = "financial-transaction-monitor/terraform.tfstate"
+  #   region         = "ca-central-1"
   #   dynamodb_table = "terraform-state-lock"
   #   encrypt        = true
   # }
@@ -24,11 +26,14 @@ provider "aws" {
   region = var.aws_region
 
   default_tags {
-    tags = {
-      Project     = var.project_name
-      Environment = var.environment
-      ManagedBy   = "Terraform"
-    }
+    tags = merge(
+      {
+        Project     = var.project_name
+        Environment = var.environment
+        ManagedBy   = "Terraform"
+      },
+      var.additional_tags
+    )
   }
 }
 
@@ -36,10 +41,9 @@ provider "aws" {
 # DynamoDB Tables
 # ============================================================================
 
-# Transactions table - stores all transaction records
 resource "aws_dynamodb_table" "transactions" {
   name         = "${var.project_name}-transactions-${var.environment}"
-  billing_mode = "PAY_PER_REQUEST" # Cost-optimized for variable workloads
+  billing_mode = "PAY_PER_REQUEST"
   hash_key     = "transaction_id"
   range_key    = "timestamp"
 
@@ -59,11 +63,10 @@ resource "aws_dynamodb_table" "transactions" {
   }
 
   attribute {
-    name = "risk_score"
-    type = "N"
+    name = "risk_level"
+    type = "S"
   }
 
-  # GSI for querying by user
   global_secondary_index {
     name            = "UserIdIndex"
     hash_key        = "user_id"
@@ -71,16 +74,15 @@ resource "aws_dynamodb_table" "transactions" {
     projection_type = "ALL"
   }
 
-  # GSI for querying high-risk transactions
   global_secondary_index {
-    name            = "RiskScoreIndex"
-    hash_key        = "risk_score"
+    name            = "RiskLevelIndex"
+    hash_key        = "risk_level"
     range_key       = "timestamp"
     projection_type = "ALL"
   }
 
   point_in_time_recovery {
-    enabled = var.environment == "production"
+    enabled = var.enable_point_in_time_recovery || var.environment == "production"
   }
 
   server_side_encryption {
@@ -97,7 +99,6 @@ resource "aws_dynamodb_table" "transactions" {
   }
 }
 
-# Fraud alerts table - stores detected fraud cases
 resource "aws_dynamodb_table" "fraud_alerts" {
   name         = "${var.project_name}-fraud-alerts-${var.environment}"
   billing_mode = "PAY_PER_REQUEST"
@@ -127,11 +128,16 @@ resource "aws_dynamodb_table" "fraud_alerts" {
   }
 
   point_in_time_recovery {
-    enabled = var.environment == "production"
+    enabled = var.enable_point_in_time_recovery || var.environment == "production"
   }
 
   server_side_encryption {
     enabled = true
+  }
+
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
   }
 
   tags = {
@@ -143,17 +149,24 @@ resource "aws_dynamodb_table" "fraud_alerts" {
 # SQS Queues
 # ============================================================================
 
-# Main transaction processing queue
+resource "aws_sqs_queue" "transaction_dlq" {
+  name                      = "${var.project_name}-transactions-dlq-${var.environment}"
+  message_retention_seconds = 1209600
+
+  tags = {
+    Name = "${var.project_name}-transaction-dlq"
+  }
+}
+
 resource "aws_sqs_queue" "transaction_queue" {
   name                       = "${var.project_name}-transactions-${var.environment}"
-  visibility_timeout_seconds = 300     # 5 minutes (6x Lambda timeout)
-  message_retention_seconds  = 1209600 # 14 days
-  receive_wait_time_seconds  = 20      # Long polling
+  visibility_timeout_seconds = var.sqs_visibility_timeout
+  message_retention_seconds  = 1209600
+  receive_wait_time_seconds  = 20
 
-  # Enable dead-letter queue
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.transaction_dlq.arn
-    maxReceiveCount     = 3
+    maxReceiveCount     = var.sqs_max_receive_count
   })
 
   tags = {
@@ -161,34 +174,6 @@ resource "aws_sqs_queue" "transaction_queue" {
   }
 }
 
-# Dead-letter queue for failed transactions
-resource "aws_sqs_queue" "transaction_dlq" {
-  name                      = "${var.project_name}-transactions-dlq-${var.environment}"
-  message_retention_seconds = 1209600 # 14 days
-
-  tags = {
-    Name = "${var.project_name}-transaction-dlq"
-  }
-}
-
-# High-priority fraud alert queue
-resource "aws_sqs_queue" "fraud_alert_queue" {
-  name                       = "${var.project_name}-fraud-alerts-${var.environment}"
-  visibility_timeout_seconds = 120
-  message_retention_seconds  = 604800 # 7 days
-  receive_wait_time_seconds  = 20
-
-  redrive_policy = jsonencode({
-    deadLetterTargetArn = aws_sqs_queue.fraud_alert_dlq.arn
-    maxReceiveCount     = 2
-  })
-
-  tags = {
-    Name = "${var.project_name}-fraud-alert-queue"
-  }
-}
-
-# Dead-letter queue for failed fraud alerts
 resource "aws_sqs_queue" "fraud_alert_dlq" {
   name                      = "${var.project_name}-fraud-alerts-dlq-${var.environment}"
   message_retention_seconds = 1209600
@@ -198,54 +183,31 @@ resource "aws_sqs_queue" "fraud_alert_dlq" {
   }
 }
 
+resource "aws_sqs_queue" "fraud_alert_queue" {
+  name                       = "${var.project_name}-fraud-alerts-${var.environment}"
+  visibility_timeout_seconds = var.fraud_detector_timeout * 6
+  message_retention_seconds  = 604800
+  receive_wait_time_seconds  = 20
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.fraud_alert_dlq.arn
+    maxReceiveCount     = var.sqs_max_receive_count
+  })
+
+  tags = {
+    Name = "${var.project_name}-fraud-alert-queue"
+  }
+}
+
 # ============================================================================
-# S3 Buckets
+# S3 Bucket
 # ============================================================================
 
-# Bucket for transaction logs and analytics
 resource "aws_s3_bucket" "transaction_logs" {
   bucket = "${var.project_name}-transaction-logs-${var.environment}-${data.aws_caller_identity.current.account_id}"
 
   tags = {
     Name = "${var.project_name}-transaction-logs"
-  }
-}
-
-resource "aws_s3_bucket_versioning" "transaction_logs" {
-  bucket = aws_s3_bucket.transaction_logs.id
-
-  versioning_configuration {
-    status = var.environment == "production" ? "Enabled" : "Suspended"
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "transaction_logs" {
-  bucket = aws_s3_bucket.transaction_logs.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
-  }
-}
-
-resource "aws_s3_bucket_lifecycle_configuration" "transaction_logs" {
-  bucket = aws_s3_bucket.transaction_logs.id
-
-  rule {
-    id     = "archive-old-logs"
-    status = "Enabled"
-
-    filter {}
-
-    transition {
-      days          = 90
-      storage_class = "GLACIER"
-    }
-
-    expiration {
-      days = 365
-    }
   }
 }
 
@@ -258,59 +220,77 @@ resource "aws_s3_bucket_public_access_block" "transaction_logs" {
   restrict_public_buckets = true
 }
 
+resource "aws_s3_bucket_server_side_encryption_configuration" "transaction_logs" {
+  bucket = aws_s3_bucket.transaction_logs.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_versioning" "transaction_logs" {
+  bucket = aws_s3_bucket.transaction_logs.id
+
+  versioning_configuration {
+    status = var.environment == "production" ? "Enabled" : "Suspended"
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "transaction_logs" {
+  bucket = aws_s3_bucket.transaction_logs.id
+
+  rule {
+    id     = "expire-transaction-audit-logs"
+    status = "Enabled"
+
+    filter {}
+
+    transition {
+      days          = var.s3_lifecycle_glacier_days
+      storage_class = "GLACIER"
+    }
+
+    expiration {
+      days = var.s3_lifecycle_expiration_days
+    }
+  }
+}
+
 # ============================================================================
-# IAM Roles for Lambda Functions
+# IAM Roles
 # ============================================================================
 
-# Transaction processor Lambda role
+data "aws_iam_policy_document" "lambda_assume_role" {
+  statement {
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
 resource "aws_iam_role" "transaction_processor_lambda" {
-  name = "${var.project_name}-transaction-processor-${var.environment}"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "lambda.amazonaws.com"
-        }
-      }
-    ]
-  })
+  name               = "${var.project_name}-transaction-processor-${var.environment}"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
 
   tags = {
     Name = "${var.project_name}-transaction-processor-role"
   }
 }
 
-# Fraud detector Lambda role
 resource "aws_iam_role" "fraud_detector_lambda" {
-  name = "${var.project_name}-fraud-detector-${var.environment}"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "lambda.amazonaws.com"
-        }
-      }
-    ]
-  })
+  name               = "${var.project_name}-fraud-detector-${var.environment}"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
 
   tags = {
     Name = "${var.project_name}-fraud-detector-role"
   }
 }
 
-# ============================================================================
-# IAM Policies
-# ============================================================================
-
-# Transaction processor policy
 resource "aws_iam_role_policy" "transaction_processor_policy" {
   name = "${var.project_name}-transaction-processor-policy"
   role = aws_iam_role.transaction_processor_lambda.id
@@ -322,9 +302,7 @@ resource "aws_iam_role_policy" "transaction_processor_policy" {
         Effect = "Allow"
         Action = [
           "dynamodb:PutItem",
-          "dynamodb:GetItem",
-          "dynamodb:Query",
-          "dynamodb:UpdateItem"
+          "dynamodb:Query"
         ]
         Resource = [
           aws_dynamodb_table.transactions.arn,
@@ -341,17 +319,14 @@ resource "aws_iam_role_policy" "transaction_processor_policy" {
         Resource = aws_sqs_queue.transaction_queue.arn
       },
       {
-        Effect = "Allow"
-        Action = [
-          "sqs:SendMessage"
-        ]
+        Effect   = "Allow"
+        Action   = ["sqs:SendMessage"]
         Resource = aws_sqs_queue.fraud_alert_queue.arn
       },
       {
         Effect = "Allow"
         Action = [
-          "s3:PutObject",
-          "s3:GetObject"
+          "s3:PutObject"
         ]
         Resource = "${aws_s3_bucket.transaction_logs.arn}/*"
       },
@@ -367,7 +342,6 @@ resource "aws_iam_role_policy" "transaction_processor_policy" {
   })
 }
 
-# Fraud detector policy
 resource "aws_iam_role_policy" "fraud_detector_policy" {
   name = "${var.project_name}-fraud-detector-policy"
   role = aws_iam_role.fraud_detector_lambda.id
@@ -379,14 +353,11 @@ resource "aws_iam_role_policy" "fraud_detector_policy" {
         Effect = "Allow"
         Action = [
           "dynamodb:PutItem",
-          "dynamodb:GetItem",
           "dynamodb:Query"
         ]
         Resource = [
           aws_dynamodb_table.fraud_alerts.arn,
-          "${aws_dynamodb_table.fraud_alerts.arn}/index/*",
-          aws_dynamodb_table.transactions.arn,
-          "${aws_dynamodb_table.transactions.arn}/index/*"
+          "${aws_dynamodb_table.fraud_alerts.arn}/index/*"
         ]
       },
       {
@@ -417,7 +388,6 @@ resource "aws_iam_role_policy" "fraud_detector_policy" {
   })
 }
 
-# Attach AWS managed policy for Lambda basic execution
 resource "aws_iam_role_policy_attachment" "transaction_processor_basic" {
   role       = aws_iam_role.transaction_processor_lambda.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
@@ -451,17 +421,35 @@ resource "aws_cloudwatch_log_group" "fraud_detector" {
 }
 
 # ============================================================================
+# Lambda Packages
+# ============================================================================
+
+data "archive_file" "transaction_processor" {
+  type        = "zip"
+  source_file = "${path.module}/../lambda-functions/transaction_processor.py"
+  output_path = "${path.module}/transaction_processor.zip"
+}
+
+data "archive_file" "fraud_detector" {
+  type        = "zip"
+  source_file = "${path.module}/../lambda-functions/fraud_detector.py"
+  output_path = "${path.module}/fraud_detector.zip"
+}
+
+# ============================================================================
 # Lambda Functions
 # ============================================================================
 
 resource "aws_lambda_function" "transaction_processor" {
-  function_name = "${var.project_name}-transaction-processor-${var.environment}"
-  role          = aws_iam_role.transaction_processor_lambda.arn
-  runtime       = var.lambda_runtime
-  handler       = "transaction_processor.lambda_handler"
-  filename      = "${path.module}/../lambda-functions/transaction_processor.zip"
-  timeout       = var.transaction_processor_timeout
-  memory_size   = var.transaction_processor_memory
+  function_name                  = "${var.project_name}-transaction-processor-${var.environment}"
+  role                           = aws_iam_role.transaction_processor_lambda.arn
+  runtime                        = var.lambda_runtime
+  handler                        = "transaction_processor.lambda_handler"
+  filename                       = data.archive_file.transaction_processor.output_path
+  source_code_hash               = data.archive_file.transaction_processor.output_base64sha256
+  timeout                        = var.transaction_processor_timeout
+  memory_size                    = var.transaction_processor_memory
+  reserved_concurrent_executions = var.lambda_reserved_concurrency
 
   tracing_config {
     mode = var.enable_xray_tracing ? "Active" : "PassThrough"
@@ -469,19 +457,20 @@ resource "aws_lambda_function" "transaction_processor" {
 
   environment {
     variables = {
-      TRANSACTIONS_TABLE             = aws_dynamodb_table.transactions.name
-      FRAUD_ALERT_QUEUE_URL          = aws_sqs_queue.fraud_alert_queue.url
-      S3_BUCKET                      = aws_s3_bucket.transaction_logs.bucket
-      FRAUD_RISK_THRESHOLD           = var.fraud_risk_threshold
-      VELOCITY_WINDOW_MINUTES        = var.velocity_check_window_minutes
-      MAX_TRANSACTIONS_PER_WINDOW    = var.max_transactions_per_window
-      SUSPICIOUS_AMOUNT_THRESHOLD    = var.suspicious_amount_threshold
-      ENVIRONMENT                    = var.environment
+      TRANSACTIONS_TABLE          = aws_dynamodb_table.transactions.name
+      FRAUD_ALERT_QUEUE_URL       = aws_sqs_queue.fraud_alert_queue.url
+      S3_BUCKET                   = aws_s3_bucket.transaction_logs.bucket
+      FRAUD_RISK_THRESHOLD        = tostring(var.fraud_risk_threshold)
+      VELOCITY_WINDOW_MINUTES     = tostring(var.velocity_check_window_minutes)
+      MAX_TRANSACTIONS_PER_WINDOW = tostring(var.max_transactions_per_window)
+      SUSPICIOUS_AMOUNT_THRESHOLD = tostring(var.suspicious_amount_threshold)
+      ENVIRONMENT                 = var.environment
     }
   }
 
   depends_on = [
-    aws_cloudwatch_log_group.transaction_processor
+    aws_cloudwatch_log_group.transaction_processor,
+    aws_iam_role_policy_attachment.transaction_processor_basic
   ]
 
   tags = {
@@ -489,9 +478,49 @@ resource "aws_lambda_function" "transaction_processor" {
   }
 }
 
+resource "aws_lambda_function" "fraud_detector" {
+  function_name                  = "${var.project_name}-fraud-detector-${var.environment}"
+  role                           = aws_iam_role.fraud_detector_lambda.arn
+  runtime                        = var.lambda_runtime
+  handler                        = "fraud_detector.lambda_handler"
+  filename                       = data.archive_file.fraud_detector.output_path
+  source_code_hash               = data.archive_file.fraud_detector.output_base64sha256
+  timeout                        = var.fraud_detector_timeout
+  memory_size                    = var.fraud_detector_memory
+  reserved_concurrent_executions = var.lambda_reserved_concurrency
+
+  tracing_config {
+    mode = var.enable_xray_tracing ? "Active" : "PassThrough"
+  }
+
+  environment {
+    variables = {
+      FRAUD_ALERTS_TABLE = aws_dynamodb_table.fraud_alerts.name
+      S3_BUCKET          = aws_s3_bucket.transaction_logs.bucket
+      ENVIRONMENT        = var.environment
+    }
+  }
+
+  depends_on = [
+    aws_cloudwatch_log_group.fraud_detector,
+    aws_iam_role_policy_attachment.fraud_detector_basic
+  ]
+
+  tags = {
+    Name = "${var.project_name}-fraud-detector"
+  }
+}
+
 resource "aws_lambda_event_source_mapping" "transaction_processor_sqs" {
   event_source_arn        = aws_sqs_queue.transaction_queue.arn
   function_name           = aws_lambda_function.transaction_processor.arn
+  batch_size              = 10
+  function_response_types = ["ReportBatchItemFailures"]
+}
+
+resource "aws_lambda_event_source_mapping" "fraud_detector_sqs" {
+  event_source_arn        = aws_sqs_queue.fraud_alert_queue.arn
+  function_name           = aws_lambda_function.fraud_detector.arn
   batch_size              = 10
   function_response_types = ["ReportBatchItemFailures"]
 }

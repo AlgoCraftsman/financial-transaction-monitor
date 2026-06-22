@@ -16,8 +16,6 @@ override.tf.json
 *tfplan*
 .terraformrc
 terraform.rc
-# Uncomment if your team does not commit the lock file
-# .terraform.lock.hcl
 
 # ============================================================================
 # Python
@@ -31,63 +29,37 @@ __pycache__/
 *$py.class
 *.so
 .Python
-
-# Virtual environments
 .venv/
 venv/
 env/
 ENV/
-
-# Distribution / packaging
 build/
 dist/
 *.egg-info/
 *.egg
 .eggs/
-wheels/
-develop-eggs/
-downloads/
-eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-
-# Testing
+htmlcov/
 .pytest_cache/
 .coverage
 .coverage.*
-htmlcov/
 coverage.xml
-*.pytest_cache/
-
-# Type checking
 .mypy_cache/
-.dmypy.json
+.ruff_cache/
 
 # ============================================================================
 # Lambda
 # ============================================================================
 
-# Build artifacts — zip locally or via CI, never commit
 *.zip
-
-# Layer build output
 lambda-functions/package/
 lambda-functions/python/
 
 # ============================================================================
-# AWS
+# AWS and Secrets
 # ============================================================================
 
 .aws/
 credentials
-
-# ============================================================================
-# Secrets & Environment Variables
-# ============================================================================
-
 .env
 .env.local
 .env.*.local
@@ -97,7 +69,7 @@ secrets.auto.tfvars
 *.key
 
 # ============================================================================
-# IDE & OS
+# IDE, OS, and Logs
 # ============================================================================
 
 .vscode/
@@ -107,11 +79,6 @@ secrets.auto.tfvars
 *~
 .DS_Store
 Thumbs.db
-
-# ============================================================================
-# Logs & Misc
-# ============================================================================
-
 *.log
 logs/
 *.tmp

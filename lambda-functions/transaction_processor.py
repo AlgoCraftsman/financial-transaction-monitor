@@ -1,316 +1,294 @@
+"""
+Transaction processor Lambda.
 
+Trigger: SQS transaction queue
+Writes: DynamoDB transactions table
+Forwards: high-risk transactions to the fraud alert queue
+Archives: transaction audit records to S3
 """
-Transaction Processor Lambda Function
---------------------------------------
-Trigger:    SQS - txn-monitor-transactions-{env}
-Writes to:  DynamoDB - txn-monitor-transactions-{env}
-Forwards:   SQS - txn-monitor-fraud-alerts-{env}  (when risk_score >= threshold)
-Logs to:    S3  - txn-monitor-transaction-logs-{env}-{account_id}
-"""
- 
+
 import json
+import logging
 import os
 import time
 import uuid
-import logging
 from decimal import Decimal, InvalidOperation
 from typing import Any
- 
+
 import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
- 
-# ============================================================================
-# Logging
-# ============================================================================
- 
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
- 
-# ============================================================================
-# Environment Variables (injected by Terraform / Lambda config)
-# ============================================================================
- 
-TRANSACTIONS_TABLE   = os.environ["TRANSACTIONS_TABLE"]       # txn-monitor-transactions-dev
-FRAUD_ALERT_QUEUE    = os.environ["FRAUD_ALERT_QUEUE_URL"]    # https://sqs...fraud-alerts-dev
-S3_BUCKET            = os.environ["S3_BUCKET"]                # txn-monitor-transaction-logs-dev-...
+
 FRAUD_RISK_THRESHOLD = int(os.environ.get("FRAUD_RISK_THRESHOLD", "75"))
-VELOCITY_WINDOW_MIN  = int(os.environ.get("VELOCITY_WINDOW_MINUTES", "60"))
-MAX_TXN_PER_WINDOW   = int(os.environ.get("MAX_TRANSACTIONS_PER_WINDOW", "10"))
-SUSPICIOUS_AMOUNT    = float(os.environ.get("SUSPICIOUS_AMOUNT_THRESHOLD", "1000.0"))
-ENVIRONMENT          = os.environ.get("ENVIRONMENT", "dev")
- 
-# ============================================================================
-# AWS Clients
-# ============================================================================
- 
-dynamodb = boto3.resource("dynamodb")
-sqs      = boto3.client("sqs")
-s3       = boto3.client("s3")
- 
-transactions_table = dynamodb.Table(TRANSACTIONS_TABLE)
- 
-# ============================================================================
-# Validation
-# ============================================================================
- 
+VELOCITY_WINDOW_MINUTES = int(os.environ.get("VELOCITY_WINDOW_MINUTES", "60"))
+MAX_TRANSACTIONS_PER_WINDOW = int(os.environ.get("MAX_TRANSACTIONS_PER_WINDOW", "10"))
+SUSPICIOUS_AMOUNT_THRESHOLD = Decimal(
+    os.environ.get("SUSPICIOUS_AMOUNT_THRESHOLD", "1000.00")
+)
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
+
 REQUIRED_FIELDS = {"transaction_id", "user_id", "amount", "timestamp"}
- 
-VALID_CURRENCIES       = {"USD", "CAD", "EUR", "GBP", "JPY", "AUD", "CHF"}
+VALID_CURRENCIES = {"USD", "CAD", "EUR", "GBP", "JPY", "AUD", "CHF"}
 VALID_TRANSACTION_TYPES = {"purchase", "withdrawal", "transfer", "refund", "payment"}
- 
- 
-def validate_transaction(txn: dict) -> list[str]:
-    """
-    Validates the transaction payload.
-    Returns a list of error strings (empty = valid).
-    """
-    errors = []
- 
-    # Required fields
-    missing = REQUIRED_FIELDS - txn.keys()
+
+_transactions_table = None
+_sqs_client = None
+_s3_client = None
+
+
+def _required_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
+
+def get_transactions_table():
+    global _transactions_table
+    if _transactions_table is None:
+        dynamodb = boto3.resource("dynamodb")
+        _transactions_table = dynamodb.Table(_required_env("TRANSACTIONS_TABLE"))
+    return _transactions_table
+
+
+def get_sqs_client():
+    global _sqs_client
+    if _sqs_client is None:
+        _sqs_client = boto3.client("sqs")
+    return _sqs_client
+
+
+def get_s3_client():
+    global _s3_client
+    if _s3_client is None:
+        _s3_client = boto3.client("s3")
+    return _s3_client
+
+
+def validate_transaction(transaction: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+
+    missing = REQUIRED_FIELDS - transaction.keys()
     if missing:
         errors.append(f"Missing required fields: {sorted(missing)}")
-        return errors  # Can't continue without the basics
- 
-    # transaction_id
-    if not isinstance(txn["transaction_id"], str) or not txn["transaction_id"].strip():
+        return errors
+
+    if not isinstance(transaction["transaction_id"], str) or not transaction[
+        "transaction_id"
+    ].strip():
         errors.append("transaction_id must be a non-empty string")
- 
-    # user_id
-    if not isinstance(txn["user_id"], str) or not txn["user_id"].strip():
+
+    if not isinstance(transaction["user_id"], str) or not transaction["user_id"].strip():
         errors.append("user_id must be a non-empty string")
- 
-    # amount
+
     try:
-        amount = Decimal(str(txn["amount"]))
+        amount = Decimal(str(transaction["amount"]))
         if amount <= 0:
             errors.append("amount must be greater than 0")
         if amount > Decimal("1000000"):
             errors.append("amount exceeds maximum allowed value (1,000,000)")
     except (InvalidOperation, TypeError):
-        errors.append(f"amount must be a valid number, got: {txn['amount']!r}")
- 
-    # timestamp — expect Unix epoch (integer or float)
+        errors.append(f"amount must be a valid number, got: {transaction['amount']!r}")
+
     try:
-        ts = float(txn["timestamp"])
+        timestamp = float(transaction["timestamp"])
         now = time.time()
-        if ts > now + 300:          # 5-min future tolerance
+        if timestamp > now + 300:
             errors.append("timestamp is too far in the future")
-        if ts < now - 86400 * 30:   # Older than 30 days
+        if timestamp < now - 86400 * 30:
             errors.append("timestamp is older than 30 days")
     except (TypeError, ValueError):
-        errors.append(f"timestamp must be a Unix epoch number, got: {txn['timestamp']!r}")
- 
-    # Optional but validated if present
-    if "currency" in txn and txn["currency"] not in VALID_CURRENCIES:
+        errors.append(
+            f"timestamp must be a Unix epoch number, got: {transaction['timestamp']!r}"
+        )
+
+    if "currency" in transaction and transaction["currency"] not in VALID_CURRENCIES:
         errors.append(f"currency must be one of {sorted(VALID_CURRENCIES)}")
- 
-    if "transaction_type" in txn and txn["transaction_type"] not in VALID_TRANSACTION_TYPES:
-        errors.append(f"transaction_type must be one of {sorted(VALID_TRANSACTION_TYPES)}")
- 
+
+    if (
+        "transaction_type" in transaction
+        and transaction["transaction_type"] not in VALID_TRANSACTION_TYPES
+    ):
+        errors.append(
+            f"transaction_type must be one of {sorted(VALID_TRANSACTION_TYPES)}"
+        )
+
     return errors
- 
- 
-# ============================================================================
-# Risk Scoring
-# ============================================================================
- 
-def compute_risk_score(txn: dict, velocity_count: int) -> tuple[int, list[str]]:
-    """
-    Rule-based risk scoring (0–100).
-    Returns (score, list_of_triggered_rule_names).
- 
-    Rules are additive; score is clamped to 100.
-    Designed to be replaced / augmented with an ML model later.
-    """
-    score  = 0
+
+
+def compute_risk_score(
+    transaction: dict[str, Any], velocity_count: int
+) -> tuple[int, list[str]]:
+    score = 0
     flags: list[str] = []
- 
-    amount = float(txn["amount"])
- 
-    # --- Amount rules ---
-    if amount >= SUSPICIOUS_AMOUNT:
+    amount = Decimal(str(transaction["amount"]))
+
+    if amount >= SUSPICIOUS_AMOUNT_THRESHOLD:
         score += 25
         flags.append("high_amount")
- 
-    if amount >= SUSPICIOUS_AMOUNT * 5:     # 5x threshold = very high
+
+    if amount >= SUSPICIOUS_AMOUNT_THRESHOLD * 5:
         score += 20
         flags.append("very_high_amount")
- 
-    # Round-number amounts are a classic fraud signal
-    if amount == int(amount) and amount >= 500:
+
+    if amount == amount.to_integral_value() and amount >= Decimal("500"):
         score += 10
         flags.append("round_number_amount")
- 
-    # --- Velocity rules ---
-    if velocity_count >= MAX_TXN_PER_WINDOW:
+
+    if velocity_count >= MAX_TRANSACTIONS_PER_WINDOW:
         score += 30
         flags.append("velocity_exceeded")
-    elif velocity_count >= MAX_TXN_PER_WINDOW * 0.7:   # 70% of limit = warning
+    elif velocity_count >= MAX_TRANSACTIONS_PER_WINDOW * 0.7:
         score += 15
         flags.append("velocity_warning")
- 
-    # --- Transaction type rules ---
-    txn_type = txn.get("transaction_type", "")
-    if txn_type == "withdrawal" and amount >= SUSPICIOUS_AMOUNT:
+
+    transaction_type = transaction.get("transaction_type", "")
+    if transaction_type == "withdrawal" and amount >= SUSPICIOUS_AMOUNT_THRESHOLD:
         score += 20
         flags.append("high_value_withdrawal")
- 
-    if txn_type == "transfer" and amount >= SUSPICIOUS_AMOUNT * 2:
+
+    if transaction_type == "transfer" and amount >= SUSPICIOUS_AMOUNT_THRESHOLD * 2:
         score += 15
         flags.append("high_value_transfer")
- 
-    # --- Off-hours heuristic (UTC 01:00–05:00) ---
-    hour_utc = time.gmtime(float(txn["timestamp"])).tm_hour
+
+    hour_utc = time.gmtime(float(transaction["timestamp"])).tm_hour
     if 1 <= hour_utc <= 5:
         score += 10
         flags.append("off_hours")
- 
+
     return min(score, 100), flags
- 
- 
+
+
+def classify_risk(score: int) -> str:
+    if score >= FRAUD_RISK_THRESHOLD:
+        return "high"
+    if score >= 50:
+        return "medium"
+    return "low"
+
+
 def get_velocity_count(user_id: str, window_start_epoch: int) -> int:
-    """
-    Counts how many transactions the user has made since window_start_epoch.
-    Uses the UserIdIndex GSI (hash: user_id, range: timestamp).
-    Returns 0 on any DynamoDB error to avoid blocking legitimate transactions.
-    """
     try:
-        resp = transactions_table.query(
+        response = get_transactions_table().query(
             IndexName="UserIdIndex",
             KeyConditionExpression=(
-                Key("user_id").eq(user_id) &
-                Key("timestamp").gte(window_start_epoch)
+                Key("user_id").eq(user_id) & Key("timestamp").gte(window_start_epoch)
             ),
             Select="COUNT",
         )
-        return resp.get("Count", 0)
+        return response.get("Count", 0)
     except ClientError as exc:
         logger.warning(
             "velocity_check_failed user_id=%s error=%s",
-            user_id, exc.response["Error"]["Code"],
+            user_id,
+            exc.response["Error"]["Code"],
         )
         return 0
- 
- 
-# ============================================================================
-# DynamoDB Write
-# ============================================================================
- 
-def save_transaction(txn: dict, risk_score: int, risk_flags: list[str]) -> None:
-    """
-    Writes the enriched transaction record to DynamoDB.
- 
-    Schema (matches main.tf):
-      PK: transaction_id (S)
-      SK: timestamp      (N)
-      GSI1: UserIdIndex  (user_id / timestamp)
-      GSI2: RiskScoreIndex (risk_score / timestamp)
-      TTL: ttl           (N)  — 90 days
-    """
-    ttl = int(time.time()) + 90 * 24 * 3600   # 90-day TTL
- 
+
+
+def save_transaction(
+    transaction: dict[str, Any], risk_score: int, risk_flags: list[str]
+) -> None:
+    now = int(time.time())
     item = {
-        "transaction_id":   txn["transaction_id"],
-        "timestamp":        int(txn["timestamp"]),
-        "user_id":          txn["user_id"],
-        "amount":           Decimal(str(txn["amount"])),
-        "risk_score":       risk_score,
-        "risk_flags":       risk_flags,
-        "currency":         txn.get("currency", "USD"),
-        "transaction_type": txn.get("transaction_type", "purchase"),
-        "merchant_id":      txn.get("merchant_id", ""),
-        "merchant_category":txn.get("merchant_category", ""),
-        "location":         txn.get("location", ""),
-        "status":           "processed",
-        "processed_at":     int(time.time()),
-        "environment":      ENVIRONMENT,
-        "ttl":              ttl,
+        "transaction_id": transaction["transaction_id"],
+        "timestamp": int(transaction["timestamp"]),
+        "user_id": transaction["user_id"],
+        "amount": Decimal(str(transaction["amount"])),
+        "currency": transaction.get("currency", "USD"),
+        "transaction_type": transaction.get("transaction_type", "purchase"),
+        "merchant_id": transaction.get("merchant_id", ""),
+        "merchant_category": transaction.get("merchant_category", ""),
+        "location": transaction.get("location", ""),
+        "risk_score": risk_score,
+        "risk_level": classify_risk(risk_score),
+        "risk_flags": risk_flags,
+        "status": "processed",
+        "processed_at": now,
+        "environment": ENVIRONMENT,
+        "ttl": now + 90 * 24 * 3600,
     }
- 
-    transactions_table.put_item(
+
+    get_transactions_table().put_item(
         Item=item,
-        ConditionExpression="attribute_not_exists(transaction_id)",  # Idempotency guard
+        ConditionExpression="attribute_not_exists(transaction_id)",
     )
     logger.info(
         "transaction_saved transaction_id=%s risk_score=%d",
-        txn["transaction_id"], risk_score,
+        transaction["transaction_id"],
+        risk_score,
     )
- 
- 
-# ============================================================================
-# Fraud Alert Forwarding
-# ============================================================================
- 
-def forward_fraud_alert(txn: dict, risk_score: int, risk_flags: list[str]) -> None:
-    """
-    Sends a message to the fraud alert SQS queue.
-    The fraud_detector Lambda consumes this queue.
-    """
+
+
+def forward_fraud_alert(
+    transaction: dict[str, Any], risk_score: int, risk_flags: list[str]
+) -> None:
     alert_payload = {
-        "alert_id":       str(uuid.uuid4()),
-        "transaction_id": txn["transaction_id"],
-        "user_id":        txn["user_id"],
-        "amount":         float(txn["amount"]),
-        "currency":       txn.get("currency", "USD"),
-        "risk_score":     risk_score,
-        "risk_flags":     risk_flags,
-        "timestamp":      int(txn["timestamp"]),
-        "detected_at":    int(time.time()),
-        "environment":    ENVIRONMENT,
+        "alert_id": str(uuid.uuid4()),
+        "transaction_id": transaction["transaction_id"],
+        "user_id": transaction["user_id"],
+        "amount": float(transaction["amount"]),
+        "currency": transaction.get("currency", "USD"),
+        "risk_score": risk_score,
+        "risk_level": classify_risk(risk_score),
+        "risk_flags": risk_flags,
+        "timestamp": int(transaction["timestamp"]),
+        "detected_at": int(time.time()),
+        "environment": ENVIRONMENT,
     }
- 
-    sqs.send_message(
-        QueueUrl=FRAUD_ALERT_QUEUE,
+
+    get_sqs_client().send_message(
+        QueueUrl=_required_env("FRAUD_ALERT_QUEUE_URL"),
         MessageBody=json.dumps(alert_payload),
         MessageAttributes={
             "risk_score": {
                 "StringValue": str(risk_score),
-                "DataType":    "Number",
+                "DataType": "Number",
+            },
+            "risk_level": {
+                "StringValue": classify_risk(risk_score),
+                "DataType": "String",
             },
             "user_id": {
-                "StringValue": txn["user_id"],
-                "DataType":    "String",
+                "StringValue": transaction["user_id"],
+                "DataType": "String",
             },
         },
-        MessageGroupId=txn["user_id"],          # Groups alerts by user (FIFO-compatible)
     )
     logger.warning(
         "fraud_alert_forwarded transaction_id=%s user_id=%s risk_score=%d flags=%s",
-        txn["transaction_id"], txn["user_id"], risk_score, risk_flags,
+        transaction["transaction_id"],
+        transaction["user_id"],
+        risk_score,
+        risk_flags,
     )
- 
- 
-# ============================================================================
-# S3 Audit Log
-# ============================================================================
- 
-def archive_to_s3(txn: dict, risk_score: int, risk_flags: list[str]) -> None:
-    """
-    Writes a JSON audit record to S3.
-    Key pattern: logs/{env}/YYYY/MM/DD/{transaction_id}.json
-    Failures are logged but do NOT fail the Lambda — archival is best-effort.
-    """
-    ts   = time.gmtime(float(txn["timestamp"]))
-    key  = (
-        f"logs/{ENVIRONMENT}/"
-        f"{ts.tm_year}/{ts.tm_mon:02d}/{ts.tm_mday:02d}/"
-        f"{txn['transaction_id']}.json"
+
+
+def archive_to_s3(
+    transaction: dict[str, Any], risk_score: int, risk_flags: list[str]
+) -> None:
+    timestamp = time.gmtime(float(transaction["timestamp"]))
+    key = (
+        f"transactions/{ENVIRONMENT}/"
+        f"{timestamp.tm_year}/{timestamp.tm_mon:02d}/{timestamp.tm_mday:02d}/"
+        f"{transaction['transaction_id']}.json"
     )
- 
     record: dict[str, Any] = {
-        **txn,
-        "amount":      float(txn["amount"]),   # S3 doesn't need Decimal
-        "risk_score":  risk_score,
-        "risk_flags":  risk_flags,
+        **transaction,
+        "amount": float(transaction["amount"]),
+        "risk_score": risk_score,
+        "risk_level": classify_risk(risk_score),
+        "risk_flags": risk_flags,
         "archived_at": int(time.time()),
         "environment": ENVIRONMENT,
     }
- 
+
     try:
-        s3.put_object(
-            Bucket=S3_BUCKET,
+        get_s3_client().put_object(
+            Bucket=_required_env("S3_BUCKET"),
             Key=key,
             Body=json.dumps(record),
             ContentType="application/json",
@@ -320,140 +298,113 @@ def archive_to_s3(txn: dict, risk_score: int, risk_flags: list[str]) -> None:
     except ClientError as exc:
         logger.error(
             "s3_archive_failed transaction_id=%s error=%s",
-            txn["transaction_id"], exc.response["Error"]["Code"],
+            transaction["transaction_id"],
+            exc.response["Error"]["Code"],
         )
- 
- 
-# ============================================================================
-# Per-Record Processing
-# ============================================================================
- 
-def process_record(record: dict) -> dict:
-    """
-    Processes a single SQS message.
-    Returns a status dict (used for structured logging and batch failure tracking).
-    """
+
+
+def process_record(record: dict[str, Any]) -> dict[str, Any]:
     message_id = record.get("messageId", "unknown")
- 
-    # --- Parse ---
+
     try:
-        txn = json.loads(record["body"])
+        transaction = json.loads(record["body"])
     except (json.JSONDecodeError, KeyError) as exc:
         logger.error("parse_failed message_id=%s error=%s", message_id, exc)
         return {"message_id": message_id, "status": "parse_error", "error": str(exc)}
- 
-    transaction_id = txn.get("transaction_id", "unknown")
- 
-    # --- Validate ---
-    errors = validate_transaction(txn)
+
+    transaction_id = transaction.get("transaction_id", "unknown")
+    errors = validate_transaction(transaction)
     if errors:
         logger.error(
             "validation_failed transaction_id=%s errors=%s", transaction_id, errors
         )
         return {
-            "message_id":     message_id,
+            "message_id": message_id,
             "transaction_id": transaction_id,
-            "status":         "validation_error",
-            "errors":         errors,
+            "status": "validation_error",
+            "errors": errors,
         }
- 
-    # --- Velocity check ---
-    window_start = int(time.time()) - VELOCITY_WINDOW_MIN * 60
-    velocity     = get_velocity_count(txn["user_id"], window_start)
- 
-    # --- Score ---
-    risk_score, risk_flags = compute_risk_score(txn, velocity)
- 
+
+    window_start = int(time.time()) - VELOCITY_WINDOW_MINUTES * 60
+    velocity_count = get_velocity_count(transaction["user_id"], window_start)
+    risk_score, risk_flags = compute_risk_score(transaction, velocity_count)
+
     logger.info(
         "transaction_scored transaction_id=%s user_id=%s amount=%s "
         "risk_score=%d velocity=%d flags=%s",
-        transaction_id, txn["user_id"], txn["amount"],
-        risk_score, velocity, risk_flags,
+        transaction_id,
+        transaction["user_id"],
+        transaction["amount"],
+        risk_score,
+        velocity_count,
+        risk_flags,
     )
- 
-    # --- Persist ---
+
     try:
-        save_transaction(txn, risk_score, risk_flags)
+        save_transaction(transaction, risk_score, risk_flags)
     except ClientError as exc:
         code = exc.response["Error"]["Code"]
         if code == "ConditionalCheckFailedException":
-            # Duplicate message — already processed; treat as success (idempotent)
             logger.warning("duplicate_transaction transaction_id=%s", transaction_id)
-            return {"message_id": message_id, "transaction_id": transaction_id, "status": "duplicate"}
+            return {
+                "message_id": message_id,
+                "transaction_id": transaction_id,
+                "status": "duplicate",
+            }
         logger.error("dynamodb_write_failed transaction_id=%s error=%s", transaction_id, code)
-        raise   # Re-raise so SQS retries (up to maxReceiveCount=3 before DLQ)
- 
-    # --- Forward fraud alert if above threshold ---
+        raise
+
     if risk_score >= FRAUD_RISK_THRESHOLD:
         try:
-            forward_fraud_alert(txn, risk_score, risk_flags)
+            forward_fraud_alert(transaction, risk_score, risk_flags)
         except ClientError as exc:
-            # Log but don't re-raise — the transaction is already saved
             logger.error(
                 "fraud_forward_failed transaction_id=%s error=%s",
-                transaction_id, exc.response["Error"]["Code"],
+                transaction_id,
+                exc.response["Error"]["Code"],
             )
- 
-    # --- Archive (best-effort) ---
-    archive_to_s3(txn, risk_score, risk_flags)
- 
+
+    archive_to_s3(transaction, risk_score, risk_flags)
+
     return {
-        "message_id":     message_id,
+        "message_id": message_id,
         "transaction_id": transaction_id,
-        "status":         "success",
-        "risk_score":     risk_score,
-        "risk_flags":     risk_flags,
+        "status": "success",
+        "risk_score": risk_score,
+        "risk_level": classify_risk(risk_score),
+        "risk_flags": risk_flags,
     }
- 
- 
-# ============================================================================
-# Lambda Handler
-# ============================================================================
- 
-def lambda_handler(event: dict, context: Any) -> dict:
-    """
-    Entry point. Processes an SQS batch of up to 10 messages.
- 
-    Uses SQS partial batch failure reporting so successfully processed
-    messages are deleted even when others fail.
-    To enable this in Terraform:
-      function_response_types = ["ReportBatchItemFailures"]
-    """
-    records    = event.get("Records", [])
-    batch_size = len(records)
- 
-    logger.info("batch_received size=%d function=%s", batch_size, context.function_name)
- 
-    results             = []
-    failed_message_ids: list[dict] = []
- 
+
+
+def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str]]]:
+    records = event.get("Records", [])
+    function_name = getattr(context, "function_name", "transaction_processor")
+    logger.info("batch_received size=%d function=%s", len(records), function_name)
+
+    results: list[dict[str, Any]] = []
+    failed_message_ids: list[dict[str, str]] = []
+
     for record in records:
         try:
             result = process_record(record)
             results.append(result)
- 
             if result["status"] not in ("success", "duplicate"):
-                # Validation / parse errors are unrecoverable — don't retry
-                # but also don't block the rest of the batch from being deleted.
                 logger.warning(
                     "unrecoverable_record message_id=%s status=%s",
-                    result["message_id"], result["status"],
+                    result["message_id"],
+                    result["status"],
                 )
         except Exception as exc:
-            # Transient / unexpected error — signal SQS to retry this message
             message_id = record.get("messageId", "unknown")
             logger.exception("unexpected_error message_id=%s error=%s", message_id, exc)
             failed_message_ids.append({"itemIdentifier": message_id})
- 
-    # Summary log
-    successes  = sum(1 for r in results if r.get("status") == "success")
-    duplicates = sum(1 for r in results if r.get("status") == "duplicate")
-    failures   = len(failed_message_ids)
- 
+
     logger.info(
         "batch_complete total=%d success=%d duplicate=%d failed=%d",
-        batch_size, successes, duplicates, failures,
+        len(records),
+        sum(1 for item in results if item.get("status") == "success"),
+        sum(1 for item in results if item.get("status") == "duplicate"),
+        len(failed_message_ids),
     )
- 
-    # Return partial failure report so SQS only retries the failed messages
+
     return {"batchItemFailures": failed_message_ids}
