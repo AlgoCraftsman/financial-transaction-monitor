@@ -230,7 +230,7 @@ variable "s3_lifecycle_expiration_days" {
   default     = 365
 
   validation {
-    condition     = var.s3_lifecycle_expiration_days >= var.s3_lifecycle_glacier_days
-    error_message = "Expiration must be after the Glacier transition."
+    condition     = var.s3_lifecycle_expiration_days >= 30
+    error_message = "Expiration must be at least 30 days."
   }
 }
