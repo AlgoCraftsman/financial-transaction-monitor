@@ -30,7 +30,8 @@ flowchart LR
     Detector -. metrics and logs .-> CloudWatch
 ```
 
-More architecture notes are in [docs/architecture.md](docs/architecture.md).
+More architecture notes are in [docs/architecture.md](docs/architecture.md), and
+the main tradeoffs are summarized in [docs/decisions.md](docs/decisions.md).
 
 ## What It Demonstrates
 
