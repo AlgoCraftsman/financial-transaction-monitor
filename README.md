@@ -7,7 +7,7 @@ alerts for investigation.
 The repository is designed as a portfolio project that demonstrates practical
 AWS data engineering skills: event-driven ingestion, Lambda processing,
 DynamoDB data modeling, S3 audit storage, Terraform infrastructure, automated
-tests, and CI validation.
+tests, CI validation, and infrastructure security scanning.
 
 ## Architecture
 
@@ -25,9 +25,15 @@ flowchart LR
     AlertQueue --> AlertDLQ["SQS fraud alert DLQ"]
     Detector --> Alerts["DynamoDB fraud alerts table"]
     Detector --> AlertLogs["S3 alert audit logs"]
+    Detector --> Notifications["SNS email notifications"]
 
-    Processor -. metrics and logs .-> CloudWatch["CloudWatch Logs and X-Ray"]
+    Api["API Gateway HTTP API"] --> ApiHandler["Lambda API handler"]
+    ApiHandler --> Transactions
+    ApiHandler --> Alerts
+
+    Processor -. metrics and logs .-> CloudWatch["CloudWatch Logs, alarms, dashboard, X-Ray"]
     Detector -. metrics and logs .-> CloudWatch
+    ApiHandler -. metrics and logs .-> CloudWatch
 ```
 
 More architecture notes are in [docs/architecture.md](docs/architecture.md), and
@@ -41,10 +47,12 @@ the main tradeoffs are summarized in [docs/decisions.md](docs/decisions.md).
 - S3 audit logging with encryption and lifecycle policies
 - Dead-letter queues for failed transaction and alert processing
 - CloudWatch alarms for Lambda errors, DLQ messages, and near-timeout duration
+- API Gateway endpoints for transaction and alert lookup workflows
+- SNS email notifications for high-risk fraud alerts
 - Infrastructure as Code using Terraform
 - Local synthetic transaction generation
 - Unit tests for Lambda business logic
-- GitHub Actions validation for Python and Terraform
+- GitHub Actions validation for Python, Terraform, and Checkov security scanning
 
 ## Repository Structure
 
@@ -70,8 +78,11 @@ the main tradeoffs are summarized in [docs/decisions.md](docs/decisions.md).
    an audit copy to S3.
 4. High-risk transactions are forwarded to the fraud alert queue.
 5. `fraud_detector.py` validates alert messages, stores them in the fraud alerts
-   table, and archives alert audit records to S3.
-6. Failed retryable messages move to dead-letter queues after the configured
+   table, archives alert audit records to S3, and publishes optional SNS email
+   notifications.
+6. `api_handler.py` serves transaction and alert query endpoints through API
+   Gateway, including alert status updates.
+7. Failed retryable messages move to dead-letter queues after the configured
    receive count.
 
 ## Local Development
@@ -133,6 +144,27 @@ QUEUE_URL=$(terraform output -raw sqs_transaction_queue_url)
 python ../data-generator/generate_transactions.py --count 25 --queue-url "$QUEUE_URL"
 ```
 
+Query the API:
+
+```bash
+API_URL=$(terraform output -raw api_endpoint)
+curl "$API_URL/health"
+curl "$API_URL/alerts?status=open"
+curl -X PATCH "$API_URL/alerts/{alert_id}/status" \
+  -H "content-type: application/json" \
+  -d '{"status":"investigating"}'
+```
+
+To enable high-risk alert emails, add one or more addresses to
+`alert_email_addresses` in `terraform.tfvars`. AWS sends a confirmation email
+for each SNS subscription before notifications are delivered.
+
+## Demo Evidence
+
+A real AWS demo run is summarized in [docs/demo-run.md](docs/demo-run.md). It
+shows generated events, DynamoDB records, S3 audit objects, and Lambda log
+evidence with account-specific identifiers omitted.
+
 ## Security and Cost Notes
 
 - `terraform.tfvars` is intentionally ignored because local variable files can
@@ -141,7 +173,19 @@ python ../data-generator/generate_transactions.py --count 25 --queue-url "$QUEUE
 - S3 blocks public access and encrypts objects at rest.
 - Lambda logs are retained for a configurable period.
 - Dead-letter queues preserve failed events for investigation.
+- CloudWatch alarms track Lambda errors, near-timeout duration, and DLQ depth.
+- Checkov runs in GitHub Actions as a Terraform security scan.
 - No AWS resources are required to run the unit tests.
+
+## Failure Modes
+
+- Invalid transaction payloads are rejected by the transaction processor and are
+  not written to DynamoDB or S3.
+- Unexpected Lambda failures are retried by SQS and eventually move to a
+  dead-letter queue after the configured receive count.
+- DLQ CloudWatch alarms surface messages that need manual inspection or replay.
+- S3 archive failures are logged but do not block transaction persistence.
+- Fraud alert notification failures are logged after the alert is stored.
 
 ## Current Scope
 
@@ -151,17 +195,18 @@ Implemented:
 - Transaction processor Lambda
 - Fraud alert queue
 - Fraud detector Lambda
+- API Gateway query and alert status endpoints
 - DynamoDB transaction and alert storage
 - S3 audit logging
 - CloudWatch runtime health alarms
+- CloudWatch dashboard
+- SNS email notifications
 - Terraform deployment
 - Synthetic transaction generation
-- Unit tests and CI
+- Unit tests, CI, and Checkov security scanning
 
 Future production extensions:
 
-- API Gateway query endpoint
-- CloudWatch dashboard and alarms
-- SNS or email notifications
 - Remote Terraform state
+- API authentication and authorization
 - Load testing and performance tuning

@@ -59,6 +59,46 @@ output "fraud_detector_function_name" {
   value       = aws_lambda_function.fraud_detector.function_name
 }
 
+output "api_handler_function_name" {
+  description = "Name of the API handler Lambda function"
+  value       = aws_lambda_function.api_handler.function_name
+}
+
+# ============================================================================
+# API Outputs
+# ============================================================================
+
+output "api_endpoint" {
+  description = "Base URL for the transaction monitoring HTTP API"
+  value       = aws_apigatewayv2_api.monitoring_api.api_endpoint
+}
+
+output "api_routes" {
+  description = "Implemented API routes"
+  value = [
+    "GET /health",
+    "GET /transactions/{transaction_id}?timestamp={timestamp}",
+    "GET /transactions/user/{user_id}",
+    "GET /alerts?status=open",
+    "GET /alerts/{alert_id}",
+    "PATCH /alerts/{alert_id}/status"
+  ]
+}
+
+# ============================================================================
+# Notification Outputs
+# ============================================================================
+
+output "fraud_alert_topic_arn" {
+  description = "SNS topic ARN for high-risk fraud alert notifications"
+  value       = aws_sns_topic.fraud_alerts.arn
+}
+
+output "cloudwatch_dashboard_name" {
+  description = "CloudWatch dashboard for pipeline health"
+  value       = aws_cloudwatch_dashboard.pipeline.dashboard_name
+}
+
 # ============================================================================
 # CloudWatch Alarm Outputs
 # ============================================================================
@@ -68,8 +108,10 @@ output "cloudwatch_alarm_names" {
   value = [
     aws_cloudwatch_metric_alarm.transaction_processor_errors.alarm_name,
     aws_cloudwatch_metric_alarm.fraud_detector_errors.alarm_name,
+    aws_cloudwatch_metric_alarm.api_handler_errors.alarm_name,
     aws_cloudwatch_metric_alarm.transaction_processor_duration.alarm_name,
     aws_cloudwatch_metric_alarm.fraud_detector_duration.alarm_name,
+    aws_cloudwatch_metric_alarm.api_handler_duration.alarm_name,
     aws_cloudwatch_metric_alarm.transaction_dlq_messages.alarm_name,
     aws_cloudwatch_metric_alarm.fraud_alert_dlq_messages.alarm_name
   ]
@@ -94,7 +136,8 @@ output "deployment_summary" {
     velocity_check_window_mins  = var.velocity_check_window_minutes
     xray_tracing_enabled        = var.enable_xray_tracing
     point_in_time_recovery_used = var.enable_point_in_time_recovery || var.environment == "production"
-    cloudwatch_alarms           = 6
+    cloudwatch_alarms           = 8
+    api_endpoint                = aws_apigatewayv2_api.monitoring_api.api_endpoint
   }
 }
 
@@ -113,5 +156,8 @@ output "next_steps" {
     Review persisted data:
       aws dynamodb scan --table-name ${aws_dynamodb_table.transactions.name} --limit 5 --region ${var.aws_region}
       aws dynamodb scan --table-name ${aws_dynamodb_table.fraud_alerts.name} --limit 5 --region ${var.aws_region}
+
+    Query the API:
+      curl ${aws_apigatewayv2_api.monitoring_api.api_endpoint}/health
   EOT
 }

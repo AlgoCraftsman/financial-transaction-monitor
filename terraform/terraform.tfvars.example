@@ -10,19 +10,25 @@ transaction_processor_memory  = 512
 transaction_processor_timeout = 30
 fraud_detector_memory         = 512
 fraud_detector_timeout        = 30
+api_handler_memory            = 512
+api_handler_timeout           = 30
 lambda_reserved_concurrency   = -1
 
 log_retention_days  = 30
 enable_xray_tracing = true
+enable_alarm_notifications = false
 
 alarm_period_seconds                     = 300
 alarm_evaluation_periods                 = 1
 lambda_duration_alarm_threshold_percent  = 80
 
+api_allowed_origins = ["*"]
+
 fraud_risk_threshold          = 75
 velocity_check_window_minutes = 60
 max_transactions_per_window   = 10
 suspicious_amount_threshold   = 1000.00
+alert_email_addresses         = []
 
 sqs_max_receive_count  = 3
 sqs_visibility_timeout = 180

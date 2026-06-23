@@ -66,28 +66,39 @@ The services used here are serverless or usage-based in that region: Lambda, SQS
 DynamoDB on-demand, S3, CloudWatch, and IAM. The default region can still be
 changed through `terraform.tfvars` for users who prefer another AWS region.
 
-## Keep API Gateway Out of the Core Scope
+## Use API Gateway for Query and Alert Review Endpoints
 
-An API query layer would be useful, but the core project goal is to demonstrate
-an event-driven ETL pipeline. Adding API Gateway too early would increase surface
-area without improving the main data flow.
+API Gateway gives the project a lightweight operational read layer without
+changing the event-driven ingestion path. The API handler supports transaction
+lookup, user transaction history, alert lookup, alert listing by status, and
+alert status updates.
 
-The current design leaves an API layer as a clean production extension after the
-pipeline, storage model, audit trail, tests, and deployment path are solid.
+The API remains intentionally small. It demonstrates how an analyst-facing
+workflow could inspect pipeline output while leaving authentication,
+authorization, and richer search capabilities as production extensions.
+
+## Use SNS for High-Risk Alert Notifications
+
+SNS provides a simple managed notification channel for high-risk alerts. Email
+subscriptions are optional and configured through Terraform variables, so the
+default deployment does not require personal email addresses.
+
+This keeps the core pipeline deployable for a portfolio review while showing how
+alert delivery can be connected when an operator wants notifications.
 
 ## What Would Change for Production
 
 For a production deployment, the next changes would be:
 
 - Remote Terraform state in S3 with DynamoDB state locking
-- CloudWatch alarms connected to SNS or another incident channel
-- Dashboards for Lambda errors, duration, queue depth, DLQ depth, and fraud rate
+- API authentication and authorization
+- Fine-grained API request validation and throttling by environment
 - Idempotency and replay runbooks for DLQ recovery
 - Tighter IAM resource scoping where AWS service constraints allow it
 - Separate dev, staging, and production accounts or workspaces
 - Formal retention requirements for DynamoDB TTL and S3 lifecycle policies
 - Load testing against realistic transaction volumes
-- API Gateway or another read layer for investigation workflows
+- Expanded dashboards for fraud rate, API latency, and investigation outcomes
 
 Those additions are intentionally kept outside the core portfolio scope so the
 implemented repository remains focused and easy to review.
