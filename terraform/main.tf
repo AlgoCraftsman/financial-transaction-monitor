@@ -374,11 +374,6 @@ resource "aws_iam_role_policy" "transaction_processor_policy" {
         Resource = "${aws_s3_bucket.transaction_logs.arn}/*"
       },
       {
-        Effect   = "Allow"
-        Action   = ["sns:Publish"]
-        Resource = aws_sns_topic.fraud_alerts.arn
-      },
-      {
         Effect = "Allow"
         Action = [
           "xray:PutTraceSegments",
@@ -423,6 +418,11 @@ resource "aws_iam_role_policy" "fraud_detector_policy" {
           "s3:PutObject"
         ]
         Resource = "${aws_s3_bucket.transaction_logs.arn}/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["sns:Publish"]
+        Resource = aws_sns_topic.fraud_alerts.arn
       },
       {
         Effect = "Allow"
