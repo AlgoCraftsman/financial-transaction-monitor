@@ -33,6 +33,7 @@ REQUIRED_FIELDS = {
 
 _alerts_table = None
 _s3_client = None
+_sns_client = None
 
 
 def _required_env(name: str) -> str:
@@ -55,6 +56,13 @@ def get_s3_client():
     if _s3_client is None:
         _s3_client = boto3.client("s3")
     return _s3_client
+
+
+def get_sns_client():
+    global _sns_client
+    if _sns_client is None:
+        _sns_client = boto3.client("sns")
+    return _sns_client
 
 
 def validate_alert(alert: dict[str, Any]) -> list[str]:
@@ -150,6 +158,35 @@ def archive_alert(alert: dict[str, Any]) -> None:
         )
 
 
+def publish_alert_notification(alert: dict[str, Any]) -> None:
+    topic_arn = os.environ.get("FRAUD_ALERT_TOPIC_ARN")
+    if not topic_arn:
+        return
+
+    message = {
+        "alert_id": alert["alert_id"],
+        "transaction_id": alert["transaction_id"],
+        "user_id": alert["user_id"],
+        "amount": alert["amount"],
+        "currency": alert.get("currency", "USD"),
+        "risk_score": alert["risk_score"],
+        "risk_flags": alert["risk_flags"],
+    }
+    try:
+        get_sns_client().publish(
+            TopicArn=topic_arn,
+            Subject="High-risk transaction alert",
+            Message=json.dumps(message, indent=2),
+        )
+        logger.warning("fraud_alert_notification_sent alert_id=%s", alert["alert_id"])
+    except ClientError as exc:
+        logger.error(
+            "fraud_alert_notification_failed alert_id=%s error=%s",
+            alert["alert_id"],
+            exc.response["Error"]["Code"],
+        )
+
+
 def process_record(record: dict[str, Any]) -> dict[str, Any]:
     message_id = record.get("messageId", "unknown")
 
@@ -181,6 +218,7 @@ def process_record(record: dict[str, Any]) -> dict[str, Any]:
         raise
 
     archive_alert(alert)
+    publish_alert_notification(alert)
     return {"message_id": message_id, "alert_id": alert_id, "status": "success"}
 
 

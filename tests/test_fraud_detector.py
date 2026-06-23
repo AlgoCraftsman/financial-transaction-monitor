@@ -57,3 +57,15 @@ def test_process_record_saves_valid_alert(monkeypatch):
 
     assert result["status"] == "success"
     assert saved[0]["alert_id"] == "alert-123"
+
+
+def test_publish_alert_notification_skips_when_topic_not_configured(monkeypatch):
+    detector = load_fraud_detector()
+    called = []
+
+    monkeypatch.delenv("FRAUD_ALERT_TOPIC_ARN", raising=False)
+    monkeypatch.setattr(detector, "get_sns_client", lambda: called.append(True))
+
+    detector.publish_alert_notification(valid_alert())
+
+    assert called == []

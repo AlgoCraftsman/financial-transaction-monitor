@@ -12,9 +12,13 @@ monitoring ETL pipeline.
 - S3 audit log bucket
 - Lambda transaction processor
 - Lambda fraud detector
+- Lambda API handler
+- API Gateway HTTP API for query and alert status workflows
+- SNS topic and optional email subscriptions for high-risk alerts
 - IAM roles and least-privilege inline policies
 - CloudWatch log groups
 - CloudWatch alarms for Lambda errors, Lambda duration, and DLQ messages
+- CloudWatch dashboard for pipeline health
 - X-Ray tracing configuration
 
 ## Quick Start
@@ -44,6 +48,7 @@ Important variables:
 | `max_transactions_per_window` | `10` | Velocity threshold |
 | `suspicious_amount_threshold` | `1000.00` | Amount threshold for risk scoring |
 | `lambda_duration_alarm_threshold_percent` | `80` | Percent of Lambda timeout used for duration alarms |
+| `alert_email_addresses` | `[]` | Optional email recipients for high-risk alert notifications |
 
 `terraform.tfvars` is ignored by Git. Use `terraform.tfvars.example` as the
 starting point for local deployments.
@@ -54,6 +59,7 @@ Terraform uses the `archive` provider to package:
 
 - `../lambda-functions/transaction_processor.py`
 - `../lambda-functions/fraud_detector.py`
+- `../lambda-functions/api_handler.py`
 
 Generated ZIP files stay local and are ignored by Git.
 
@@ -94,12 +100,24 @@ Review alarm names:
 terraform output cloudwatch_alarm_names
 ```
 
+Query the API:
+
+```bash
+API_URL=$(terraform output -raw api_endpoint)
+curl "$API_URL/health"
+curl "$API_URL/alerts?status=open"
+curl -X PATCH "$API_URL/alerts/{alert_id}/status" \
+  -H "content-type: application/json" \
+  -d '{"status":"resolved"}'
+```
+
 ## Cost Controls
 
 - DynamoDB uses on-demand billing.
 - SQS and Lambda are usage-based.
 - CloudWatch log retention is configurable.
 - CloudWatch alarms cover Lambda errors, Lambda duration near timeout, and DLQ depth.
+- Checkov runs in CI with soft-fail output for Terraform security visibility.
 - S3 lifecycle rules transition audit objects to Glacier and expire old logs.
 
 ## Destroying the Stack

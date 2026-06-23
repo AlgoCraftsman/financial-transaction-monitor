@@ -106,6 +106,28 @@ variable "lambda_reserved_concurrency" {
   }
 }
 
+variable "api_handler_memory" {
+  description = "Memory allocation for the API handler Lambda in MB"
+  type        = number
+  default     = 512
+
+  validation {
+    condition     = var.api_handler_memory >= 128 && var.api_handler_memory <= 10240
+    error_message = "Memory must be between 128 MB and 10240 MB."
+  }
+}
+
+variable "api_handler_timeout" {
+  description = "Timeout for the API handler Lambda in seconds"
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.api_handler_timeout >= 3 && var.api_handler_timeout <= 900
+    error_message = "Timeout must be between 3 and 900 seconds."
+  }
+}
+
 # ============================================================================
 # Monitoring
 # ============================================================================
@@ -127,6 +149,12 @@ variable "enable_xray_tracing" {
   description = "Enable AWS X-Ray tracing for Lambda functions"
   type        = bool
   default     = true
+}
+
+variable "enable_alarm_notifications" {
+  description = "Send CloudWatch alarm state changes to the fraud alert SNS topic"
+  type        = bool
+  default     = false
 }
 
 variable "alarm_period_seconds" {
@@ -160,6 +188,16 @@ variable "lambda_duration_alarm_threshold_percent" {
     condition     = var.lambda_duration_alarm_threshold_percent > 0 && var.lambda_duration_alarm_threshold_percent <= 100
     error_message = "Lambda duration alarm threshold percent must be greater than 0 and at most 100."
   }
+}
+
+# ============================================================================
+# API Configuration
+# ============================================================================
+
+variable "api_allowed_origins" {
+  description = "Allowed CORS origins for the HTTP API"
+  type        = list(string)
+  default     = ["*"]
 }
 
 # ============================================================================
@@ -207,6 +245,20 @@ variable "suspicious_amount_threshold" {
   validation {
     condition     = var.suspicious_amount_threshold >= 0
     error_message = "Suspicious amount threshold must be non-negative."
+  }
+}
+
+variable "alert_email_addresses" {
+  description = "Email addresses subscribed to high-risk fraud alert notifications"
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for email in var.alert_email_addresses :
+      can(regex("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$", email))
+    ])
+    error_message = "All alert email addresses must be valid email addresses."
   }
 }
 

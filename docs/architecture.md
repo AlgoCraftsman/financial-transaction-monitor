@@ -14,6 +14,11 @@ Synthetic transactions
   -> Lambda fraud detector
   -> DynamoDB fraud alerts table
   -> S3 alert audit logs
+  -> SNS email notification topic
+
+API Gateway HTTP API
+  -> Lambda API handler
+  -> DynamoDB transactions and fraud alerts tables
 ```
 
 ## Design Choices
@@ -47,5 +52,5 @@ See [decisions.md](decisions.md) for more detail on the architectural tradeoffs.
 ## Production Extensions
 
 The current project intentionally keeps the production surface focused. The next
-reasonable additions would be CloudWatch alarms, an API Gateway query endpoint,
-and notification delivery through SNS or another alerting channel.
+reasonable additions would be API authentication, remote Terraform state, load
+testing, and formal DLQ replay runbooks.
