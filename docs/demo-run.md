@@ -116,6 +116,156 @@ fraud_alert_archived s3_key=alerts/dev/2026/06/23/33f47b93-3d41-4cfb-9e5b-3bd13e
 batch_complete total=1 success=1 duplicate=0 failed=0
 ```
 
+## API Response Evidence
+
+API evidence was captured on June 23, 2026 from the deployed `dev` stack in
+`ca-central-1`. The public API host and account-specific identifiers are omitted.
+
+Health check response:
+
+```http
+GET /health
+```
+
+```json
+{
+  "status": "ok"
+}
+```
+
+A deterministic high-risk transaction was sent through the transaction SQS queue
+to create an alert for API validation:
+
+```json
+{
+  "transaction_id": "demo-high-risk-api-003",
+  "user_id": "demo-user-001",
+  "amount": 10000.0,
+  "currency": "CAD",
+  "transaction_type": "withdrawal",
+  "merchant_category": "atm",
+  "location": "Toronto"
+}
+```
+
+Transaction lookup response:
+
+```http
+GET /transactions/demo-high-risk-api-003?timestamp=1782232460
+```
+
+```json
+{
+  "transaction": {
+    "transaction_id": "demo-high-risk-api-003",
+    "user_id": "demo-user-001",
+    "amount": 10000,
+    "currency": "CAD",
+    "transaction_type": "withdrawal",
+    "merchant_category": "atm",
+    "location": "Toronto",
+    "risk_score": 75,
+    "risk_level": "high",
+    "risk_flags": [
+      "high_amount",
+      "very_high_amount",
+      "round_number_amount",
+      "high_value_withdrawal"
+    ],
+    "status": "processed",
+    "environment": "dev"
+  }
+}
+```
+
+Alert lookup response:
+
+```http
+GET /alerts/f92a7983-d51e-441c-87e5-37482b06de2c
+```
+
+```json
+{
+  "alert": {
+    "alert_id": "f92a7983-d51e-441c-87e5-37482b06de2c",
+    "transaction_id": "demo-high-risk-api-003",
+    "user_id": "demo-user-001",
+    "amount": 10000,
+    "currency": "CAD",
+    "risk_score": 75,
+    "risk_level": "high",
+    "risk_flags": [
+      "high_amount",
+      "very_high_amount",
+      "round_number_amount",
+      "high_value_withdrawal"
+    ],
+    "status": "open",
+    "environment": "dev"
+  }
+}
+```
+
+Alert lifecycle response:
+
+```http
+PATCH /alerts/f92a7983-d51e-441c-87e5-37482b06de2c/status
+```
+
+```json
+{
+  "investigating": {
+    "alert": {
+      "alert_id": "f92a7983-d51e-441c-87e5-37482b06de2c",
+      "transaction_id": "demo-high-risk-api-003",
+      "status": "investigating",
+      "updated_at": 1782246940
+    }
+  },
+  "resolved": {
+    "alert": {
+      "alert_id": "f92a7983-d51e-441c-87e5-37482b06de2c",
+      "transaction_id": "demo-high-risk-api-003",
+      "status": "resolved",
+      "updated_at": 1782246940
+    }
+  }
+}
+```
+
+Final alert lookup response:
+
+```http
+GET /alerts/f92a7983-d51e-441c-87e5-37482b06de2c
+```
+
+```json
+{
+  "alert": {
+    "alert_id": "f92a7983-d51e-441c-87e5-37482b06de2c",
+    "transaction_id": "demo-high-risk-api-003",
+    "status": "resolved",
+    "risk_score": 75,
+    "risk_level": "high",
+    "updated_at": 1782246940
+  }
+}
+```
+
+CloudWatch logs confirmed the API demo transaction was scored, persisted,
+forwarded, archived, stored as an alert, archived as an alert audit record, and
+published to SNS:
+
+```text
+transaction_scored transaction_id=demo-high-risk-api-003 user_id=demo-user-001 amount=10000.0 risk_score=75 velocity=0 flags=['high_amount', 'very_high_amount', 'round_number_amount', 'high_value_withdrawal']
+transaction_saved transaction_id=demo-high-risk-api-003 risk_score=75
+fraud_alert_forwarded transaction_id=demo-high-risk-api-003 user_id=demo-user-001 risk_score=75 flags=['high_amount', 'very_high_amount', 'round_number_amount', 'high_value_withdrawal']
+transaction_archived s3_key=transactions/dev/2026/06/23/demo-high-risk-api-003.json
+fraud_alert_saved alert_id=f92a7983-d51e-441c-87e5-37482b06de2c transaction_id=demo-high-risk-api-003 risk_score=75
+fraud_alert_archived s3_key=alerts/dev/2026/06/23/f92a7983-d51e-441c-87e5-37482b06de2c.json
+fraud_alert_notification_sent alert_id=f92a7983-d51e-441c-87e5-37482b06de2c
+```
+
 ## S3 Audit Evidence
 
 The audit bucket contained transaction and alert JSON objects using the expected
@@ -143,6 +293,8 @@ Synthetic transactions
   -> Fraud detector Lambda
   -> DynamoDB fraud alerts table
   -> S3 fraud alert audit logs
+  -> SNS fraud alert notification
+  -> API Gateway alert lookup and lifecycle updates
 ```
 
 No credentials or account-specific identifiers are included in this document.

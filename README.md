@@ -162,8 +162,9 @@ for each SNS subscription before notifications are delivered.
 ## Demo Evidence
 
 A real AWS demo run is summarized in [docs/demo-run.md](docs/demo-run.md). It
-shows generated events, DynamoDB records, S3 audit objects, and Lambda log
-evidence with account-specific identifiers omitted.
+shows generated events, DynamoDB records, S3 audit objects, Lambda log evidence,
+sample API responses, and an alert lifecycle example with account-specific
+identifiers omitted.
 
 ## Security and Cost Notes
 
