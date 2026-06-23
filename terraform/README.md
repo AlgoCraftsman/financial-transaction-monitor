@@ -14,6 +14,7 @@ monitoring ETL pipeline.
 - Lambda fraud detector
 - IAM roles and least-privilege inline policies
 - CloudWatch log groups
+- CloudWatch alarms for Lambda errors, Lambda duration, and DLQ messages
 - X-Ray tracing configuration
 
 ## Quick Start
@@ -42,6 +43,7 @@ Important variables:
 | `velocity_check_window_minutes` | `60` | User transaction lookback window |
 | `max_transactions_per_window` | `10` | Velocity threshold |
 | `suspicious_amount_threshold` | `1000.00` | Amount threshold for risk scoring |
+| `lambda_duration_alarm_threshold_percent` | `80` | Percent of Lambda timeout used for duration alarms |
 
 `terraform.tfvars` is ignored by Git. Use `terraform.tfvars.example` as the
 starting point for local deployments.
@@ -86,11 +88,18 @@ aws logs tail "/aws/lambda/$(terraform output -raw transaction_processor_functio
   --region "$(terraform output -raw aws_region)"
 ```
 
+Review alarm names:
+
+```bash
+terraform output cloudwatch_alarm_names
+```
+
 ## Cost Controls
 
 - DynamoDB uses on-demand billing.
 - SQS and Lambda are usage-based.
 - CloudWatch log retention is configurable.
+- CloudWatch alarms cover Lambda errors, Lambda duration near timeout, and DLQ depth.
 - S3 lifecycle rules transition audit objects to Glacier and expire old logs.
 
 ## Destroying the Stack

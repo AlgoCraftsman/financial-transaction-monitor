@@ -39,6 +39,7 @@ More architecture notes are in [docs/architecture.md](docs/architecture.md).
 - DynamoDB data modeling with secondary indexes
 - S3 audit logging with encryption and lifecycle policies
 - Dead-letter queues for failed transaction and alert processing
+- CloudWatch alarms for Lambda errors, DLQ messages, and near-timeout duration
 - Infrastructure as Code using Terraform
 - Local synthetic transaction generation
 - Unit tests for Lambda business logic
@@ -144,6 +145,7 @@ Implemented:
 - Fraud detector Lambda
 - DynamoDB transaction and alert storage
 - S3 audit logging
+- CloudWatch runtime health alarms
 - Terraform deployment
 - Synthetic transaction generation
 - Unit tests and CI

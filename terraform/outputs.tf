@@ -60,6 +60,22 @@ output "fraud_detector_function_name" {
 }
 
 # ============================================================================
+# CloudWatch Alarm Outputs
+# ============================================================================
+
+output "cloudwatch_alarm_names" {
+  description = "Names of the CloudWatch alarms created for runtime health"
+  value = [
+    aws_cloudwatch_metric_alarm.transaction_processor_errors.alarm_name,
+    aws_cloudwatch_metric_alarm.fraud_detector_errors.alarm_name,
+    aws_cloudwatch_metric_alarm.transaction_processor_duration.alarm_name,
+    aws_cloudwatch_metric_alarm.fraud_detector_duration.alarm_name,
+    aws_cloudwatch_metric_alarm.transaction_dlq_messages.alarm_name,
+    aws_cloudwatch_metric_alarm.fraud_alert_dlq_messages.alarm_name
+  ]
+}
+
+# ============================================================================
 # Environment Outputs
 # ============================================================================
 
@@ -78,6 +94,7 @@ output "deployment_summary" {
     velocity_check_window_mins  = var.velocity_check_window_minutes
     xray_tracing_enabled        = var.enable_xray_tracing
     point_in_time_recovery_used = var.enable_point_in_time_recovery || var.environment == "production"
+    cloudwatch_alarms           = 6
   }
 }
 

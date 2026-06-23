@@ -37,6 +37,15 @@ provider "aws" {
   }
 }
 
+locals {
+  transaction_processor_duration_alarm_ms = (
+    var.transaction_processor_timeout * 1000 * var.lambda_duration_alarm_threshold_percent / 100
+  )
+  fraud_detector_duration_alarm_ms = (
+    var.fraud_detector_timeout * 1000 * var.lambda_duration_alarm_threshold_percent / 100
+  )
+}
+
 # ============================================================================
 # DynamoDB Tables
 # ============================================================================
@@ -523,6 +532,144 @@ resource "aws_lambda_event_source_mapping" "fraud_detector_sqs" {
   function_name           = aws_lambda_function.fraud_detector.arn
   batch_size              = 10
   function_response_types = ["ReportBatchItemFailures"]
+}
+
+# ============================================================================
+# CloudWatch Alarms
+# ============================================================================
+
+resource "aws_cloudwatch_metric_alarm" "transaction_processor_errors" {
+  alarm_name          = "${var.project_name}-transaction-processor-errors-${var.environment}"
+  alarm_description   = "Transaction processor Lambda has one or more errors."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = var.alarm_evaluation_periods
+  datapoints_to_alarm = var.alarm_evaluation_periods
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = var.alarm_period_seconds
+  statistic           = "Sum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.transaction_processor.function_name
+  }
+
+  tags = {
+    Name = "${var.project_name}-transaction-processor-errors"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "fraud_detector_errors" {
+  alarm_name          = "${var.project_name}-fraud-detector-errors-${var.environment}"
+  alarm_description   = "Fraud detector Lambda has one or more errors."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = var.alarm_evaluation_periods
+  datapoints_to_alarm = var.alarm_evaluation_periods
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = var.alarm_period_seconds
+  statistic           = "Sum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.fraud_detector.function_name
+  }
+
+  tags = {
+    Name = "${var.project_name}-fraud-detector-errors"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "transaction_processor_duration" {
+  alarm_name          = "${var.project_name}-transaction-processor-duration-${var.environment}"
+  alarm_description   = "Transaction processor Lambda duration is near its configured timeout."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = var.alarm_evaluation_periods
+  datapoints_to_alarm = var.alarm_evaluation_periods
+  metric_name         = "Duration"
+  namespace           = "AWS/Lambda"
+  period              = var.alarm_period_seconds
+  statistic           = "Maximum"
+  threshold           = local.transaction_processor_duration_alarm_ms
+  treat_missing_data  = "notBreaching"
+  unit                = "Milliseconds"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.transaction_processor.function_name
+  }
+
+  tags = {
+    Name = "${var.project_name}-transaction-processor-duration"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "fraud_detector_duration" {
+  alarm_name          = "${var.project_name}-fraud-detector-duration-${var.environment}"
+  alarm_description   = "Fraud detector Lambda duration is near its configured timeout."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = var.alarm_evaluation_periods
+  datapoints_to_alarm = var.alarm_evaluation_periods
+  metric_name         = "Duration"
+  namespace           = "AWS/Lambda"
+  period              = var.alarm_period_seconds
+  statistic           = "Maximum"
+  threshold           = local.fraud_detector_duration_alarm_ms
+  treat_missing_data  = "notBreaching"
+  unit                = "Milliseconds"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.fraud_detector.function_name
+  }
+
+  tags = {
+    Name = "${var.project_name}-fraud-detector-duration"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "transaction_dlq_messages" {
+  alarm_name          = "${var.project_name}-transaction-dlq-messages-${var.environment}"
+  alarm_description   = "Transaction dead-letter queue has visible messages."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = var.alarm_evaluation_periods
+  datapoints_to_alarm = var.alarm_evaluation_periods
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = var.alarm_period_seconds
+  statistic           = "Maximum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    QueueName = aws_sqs_queue.transaction_dlq.name
+  }
+
+  tags = {
+    Name = "${var.project_name}-transaction-dlq-messages"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "fraud_alert_dlq_messages" {
+  alarm_name          = "${var.project_name}-fraud-alert-dlq-messages-${var.environment}"
+  alarm_description   = "Fraud alert dead-letter queue has visible messages."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = var.alarm_evaluation_periods
+  datapoints_to_alarm = var.alarm_evaluation_periods
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = var.alarm_period_seconds
+  statistic           = "Maximum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    QueueName = aws_sqs_queue.fraud_alert_dlq.name
+  }
+
+  tags = {
+    Name = "${var.project_name}-fraud-alert-dlq-messages"
+  }
 }
 
 # ============================================================================
