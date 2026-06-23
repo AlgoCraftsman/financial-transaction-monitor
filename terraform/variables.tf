@@ -129,6 +129,39 @@ variable "enable_xray_tracing" {
   default     = true
 }
 
+variable "alarm_period_seconds" {
+  description = "CloudWatch alarm evaluation period in seconds"
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = contains([10, 30, 60, 300, 900], var.alarm_period_seconds)
+    error_message = "Alarm period must be one of 10, 30, 60, 300, or 900 seconds."
+  }
+}
+
+variable "alarm_evaluation_periods" {
+  description = "Number of periods used when evaluating CloudWatch alarms"
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.alarm_evaluation_periods >= 1
+    error_message = "Alarm evaluation periods must be at least 1."
+  }
+}
+
+variable "lambda_duration_alarm_threshold_percent" {
+  description = "Percent of each Lambda timeout used for duration alarms"
+  type        = number
+  default     = 80
+
+  validation {
+    condition     = var.lambda_duration_alarm_threshold_percent > 0 && var.lambda_duration_alarm_threshold_percent <= 100
+    error_message = "Lambda duration alarm threshold percent must be greater than 0 and at most 100."
+  }
+}
+
 # ============================================================================
 # Fraud Detection Configuration
 # ============================================================================
