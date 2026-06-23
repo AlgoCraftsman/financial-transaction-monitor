@@ -1,0 +1,11 @@
+{
+  "transaction_id": "sample-invalid-001",
+  "user_id": "",
+  "amount": -50.0,
+  "currency": "CAD",
+  "timestamp": 1700000000,
+  "transaction_type": "purchase",
+  "merchant_id": "merchant-invalid-001",
+  "merchant_category": "grocery",
+  "location": "Toronto"
+}

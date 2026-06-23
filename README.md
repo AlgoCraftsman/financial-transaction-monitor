@@ -51,6 +51,7 @@ More architecture notes are in [docs/architecture.md](docs/architecture.md).
 |-- data-generator/                 # Synthetic transaction event generator
 |-- docs/                           # Architecture notes
 |-- lambda-functions/               # Lambda handlers
+|-- sample-events/                  # Example input and alert payloads
 |-- terraform/                      # AWS infrastructure
 |-- tests/                          # Unit tests
 |-- .github/workflows/ci.yml        # CI checks
@@ -99,6 +100,12 @@ Generate sample transactions locally:
 
 ```bash
 python data-generator/generate_transactions.py --count 5
+```
+
+Review example payloads and expected behavior:
+
+```bash
+ls sample-events
 ```
 
 ## Terraform Deployment

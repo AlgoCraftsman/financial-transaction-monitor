@@ -1,0 +1,18 @@
+{
+  "alert_id": "sample-alert-001",
+  "transaction_id": "sample-high-risk-001",
+  "user_id": "user-demo-202",
+  "amount": 6250.0,
+  "currency": "CAD",
+  "risk_score": 75,
+  "risk_level": "high",
+  "risk_flags": [
+    "high_amount",
+    "very_high_amount",
+    "round_number_amount",
+    "high_value_withdrawal"
+  ],
+  "timestamp": 1700000000,
+  "detected_at": 1700000005,
+  "environment": "dev"
+}

@@ -1,0 +1,11 @@
+{
+  "transaction_id": "sample-high-risk-001",
+  "user_id": "user-demo-202",
+  "amount": 6250.0,
+  "currency": "CAD",
+  "timestamp": 1700000000,
+  "transaction_type": "withdrawal",
+  "merchant_id": "merchant-cash-202",
+  "merchant_category": "cash",
+  "location": "Mississauga"
+}
