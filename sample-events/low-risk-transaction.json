@@ -1,0 +1,11 @@
+{
+  "transaction_id": "sample-low-risk-001",
+  "user_id": "user-demo-101",
+  "amount": 42.75,
+  "currency": "CAD",
+  "timestamp": 1700000000,
+  "transaction_type": "purchase",
+  "merchant_id": "merchant-grocery-101",
+  "merchant_category": "grocery",
+  "location": "Toronto"
+}
