@@ -42,6 +42,8 @@ review.
 Terraform packages each Lambda handler into a ZIP file with the `archive`
 provider. The ZIP outputs are build artifacts and are ignored by Git.
 
+See [decisions.md](decisions.md) for more detail on the architectural tradeoffs.
+
 ## Production Extensions
 
 The current project intentionally keeps the production surface focused. The next
