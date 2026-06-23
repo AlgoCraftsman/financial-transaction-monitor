@@ -83,3 +83,6 @@ Thumbs.db
 logs/
 *.tmp
 *.bak
+
+# Local demo evidence exports
+docs/demo-evidence/
