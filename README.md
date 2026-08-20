@@ -189,7 +189,7 @@ identifiers omitted.
 - No AWS resources are required to run the unit tests.
 
 The implemented controls and accepted portfolio boundaries are documented in
-[docs/security.md](docs/security.md).
+[.github/SECURITY.md](.github/SECURITY.md).
 
 ## Failure Modes
 
