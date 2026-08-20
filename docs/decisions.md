@@ -73,9 +73,11 @@ changing the event-driven ingestion path. The API handler supports transaction
 lookup, user transaction history, alert lookup, alert listing by status, and
 alert status updates.
 
-The API remains intentionally small. It demonstrates how an analyst-facing
-workflow could inspect pipeline output while leaving authentication,
-authorization, and richer search capabilities as production extensions.
+The health endpoint is public because it returns no transaction data. Every
+transaction and alert route uses AWS IAM authorization, which prevents anonymous
+reads and state changes without introducing a separate identity platform for a
+short-lived portfolio deployment. A user-facing production application would
+add fine-grained roles and a dedicated identity provider.
 
 ## Use SNS for High-Risk Alert Notifications
 
@@ -91,7 +93,7 @@ alert delivery can be connected when an operator wants notifications.
 For a production deployment, the next changes would be:
 
 - Remote Terraform state in S3 with DynamoDB state locking
-- API authentication and authorization
+- Fine-grained API roles and a user-facing identity provider
 - Fine-grained API request validation and throttling by environment
 - Idempotency and replay runbooks for DLQ recovery
 - Tighter IAM resource scoping where AWS service constraints allow it

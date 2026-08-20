@@ -118,6 +118,10 @@ batch_complete total=1 success=1 duplicate=0 failed=0
 
 ## API Response Evidence
 
+The responses below were captured from a live deployment of the same API
+handler. The current Terraform configuration additionally requires IAM-signed
+requests for all transaction and alert routes; `GET /health` remains public.
+
 API evidence was captured on June 23, 2026 from the deployed `dev` stack in
 `ca-central-1`. The public API host and account-specific identifiers are omitted.
 

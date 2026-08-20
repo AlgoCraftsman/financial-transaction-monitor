@@ -16,7 +16,8 @@ Synthetic transactions
   -> S3 alert audit logs
   -> SNS email notification topic
 
-API Gateway HTTP API
+IAM-signed requests
+  -> API Gateway HTTP API
   -> Lambda API handler
   -> DynamoDB transactions and fraud alerts tables
 ```
@@ -52,5 +53,5 @@ See [decisions.md](decisions.md) for more detail on the architectural tradeoffs.
 ## Production Extensions
 
 The current project intentionally keeps the production surface focused. The next
-reasonable additions would be API authentication, remote Terraform state, load
-testing, and formal DLQ replay runbooks.
+reasonable additions would be a user-facing identity provider, remote Terraform
+state, load testing, and formal DLQ replay runbooks.
