@@ -8,7 +8,7 @@ terraform {
     }
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 6.60"
     }
   }
 
@@ -83,16 +83,32 @@ resource "aws_dynamodb_table" "transactions" {
 
   global_secondary_index {
     name            = "UserIdIndex"
-    hash_key        = "user_id"
-    range_key       = "timestamp"
     projection_type = "ALL"
+
+    key_schema {
+      attribute_name = "user_id"
+      key_type       = "HASH"
+    }
+
+    key_schema {
+      attribute_name = "timestamp"
+      key_type       = "RANGE"
+    }
   }
 
   global_secondary_index {
     name            = "RiskLevelIndex"
-    hash_key        = "risk_level"
-    range_key       = "timestamp"
     projection_type = "ALL"
+
+    key_schema {
+      attribute_name = "risk_level"
+      key_type       = "HASH"
+    }
+
+    key_schema {
+      attribute_name = "timestamp"
+      key_type       = "RANGE"
+    }
   }
 
   point_in_time_recovery {
@@ -137,9 +153,17 @@ resource "aws_dynamodb_table" "fraud_alerts" {
 
   global_secondary_index {
     name            = "StatusIndex"
-    hash_key        = "status"
-    range_key       = "created_at"
     projection_type = "ALL"
+
+    key_schema {
+      attribute_name = "status"
+      key_type       = "HASH"
+    }
+
+    key_schema {
+      attribute_name = "created_at"
+      key_type       = "RANGE"
+    }
   }
 
   point_in_time_recovery {
