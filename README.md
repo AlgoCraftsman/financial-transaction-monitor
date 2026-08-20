@@ -47,7 +47,7 @@ the main tradeoffs are summarized in [docs/decisions.md](docs/decisions.md).
 - S3 audit logging with encryption and lifecycle policies
 - Dead-letter queues for failed transaction and alert processing
 - CloudWatch alarms for Lambda errors, DLQ messages, and near-timeout duration
-- API Gateway endpoints for transaction and alert lookup workflows
+- IAM-authorized API Gateway endpoints for transaction and alert workflows
 - SNS email notifications for high-risk fraud alerts
 - Infrastructure as Code using Terraform
 - Local synthetic transaction generation
@@ -148,12 +148,19 @@ Query the API:
 
 ```bash
 API_URL=$(terraform output -raw api_endpoint)
+AWS_REGION=$(terraform output -raw aws_region)
 curl "$API_URL/health"
-curl "$API_URL/alerts?status=open"
-curl -X PATCH "$API_URL/alerts/{alert_id}/status" \
+awscurl --service execute-api --region "$AWS_REGION" \
+  "$API_URL/alerts?status=open"
+awscurl --service execute-api --region "$AWS_REGION" \
+  -X PATCH "$API_URL/alerts/{alert_id}/status" \
   -H "content-type: application/json" \
   -d '{"status":"investigating"}'
 ```
+
+The health endpoint is public. Transaction and alert routes require an
+AWS IAM principal with `execute-api:Invoke` permission and an IAM-signed request.
+The examples use `awscurl`, which can be installed with `pip install awscurl`.
 
 To enable high-risk alert emails, add one or more addresses to
 `alert_email_addresses` in `terraform.tfvars`. AWS sends a confirmation email
@@ -172,11 +179,17 @@ identifiers omitted.
   contain account-specific or sensitive values.
 - DynamoDB uses on-demand billing for unpredictable workloads.
 - S3 blocks public access and encrypts objects at rest.
+- S3 versioning and lifecycle rules protect audit history while controlling cost.
+- SQS and SNS use server-side encryption.
 - Lambda logs are retained for a configurable period.
 - Dead-letter queues preserve failed events for investigation.
 - CloudWatch alarms track Lambda errors, near-timeout duration, and DLQ depth.
-- Checkov runs in GitHub Actions as a Terraform security scan.
+- Checkov is an enforced GitHub Actions gate; documented resource-level
+  suppressions capture accepted portfolio risks.
 - No AWS resources are required to run the unit tests.
+
+The implemented controls and accepted portfolio boundaries are documented in
+[docs/security.md](docs/security.md).
 
 ## Failure Modes
 
@@ -196,7 +209,7 @@ Implemented:
 - Transaction processor Lambda
 - Fraud alert queue
 - Fraud detector Lambda
-- API Gateway query and alert status endpoints
+- IAM-authorized API Gateway query and alert status endpoints
 - DynamoDB transaction and alert storage
 - S3 audit logging
 - CloudWatch runtime health alarms
@@ -209,5 +222,9 @@ Implemented:
 Future production extensions:
 
 - Remote Terraform state
-- API authentication and authorization
+- Fine-grained API roles or a user-facing identity provider
 - Load testing and performance tuning
+
+## License
+
+This project is available under the [MIT License](LICENSE).

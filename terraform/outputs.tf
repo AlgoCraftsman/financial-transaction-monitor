@@ -85,6 +85,20 @@ output "api_routes" {
   ]
 }
 
+output "api_authorization" {
+  description = "Authorization model for API routes"
+  value = {
+    public_routes = ["GET /health"]
+    iam_routes = [
+      "GET /transactions/{transaction_id}",
+      "GET /transactions/user/{user_id}",
+      "GET /alerts",
+      "GET /alerts/{alert_id}",
+      "PATCH /alerts/{alert_id}/status"
+    ]
+  }
+}
+
 # ============================================================================
 # Notification Outputs
 # ============================================================================

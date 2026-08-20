@@ -104,12 +104,18 @@ Query the API:
 
 ```bash
 API_URL=$(terraform output -raw api_endpoint)
+AWS_REGION=$(terraform output -raw aws_region)
 curl "$API_URL/health"
-curl "$API_URL/alerts?status=open"
-curl -X PATCH "$API_URL/alerts/{alert_id}/status" \
+awscurl --service execute-api --region "$AWS_REGION" \
+  "$API_URL/alerts?status=open"
+awscurl --service execute-api --region "$AWS_REGION" \
+  -X PATCH "$API_URL/alerts/{alert_id}/status" \
   -H "content-type: application/json" \
   -d '{"status":"resolved"}'
 ```
+
+The health endpoint is public. All transaction and alert routes require
+AWS IAM authorization and an IAM principal with `execute-api:Invoke` permission.
 
 ## Cost Controls
 
@@ -117,7 +123,8 @@ curl -X PATCH "$API_URL/alerts/{alert_id}/status" \
 - SQS and Lambda are usage-based.
 - CloudWatch log retention is configurable.
 - CloudWatch alarms cover Lambda errors, Lambda duration near timeout, and DLQ depth.
-- Checkov runs in CI with soft-fail output for Terraform security visibility.
+- Checkov runs as an enforced CI gate. Inline suppressions document accepted
+  controls that are disproportionate for a short-lived synthetic-data demo.
 - S3 lifecycle rules transition audit objects to Glacier and expire old logs.
 
 ## Destroying the Stack

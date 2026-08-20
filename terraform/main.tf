@@ -55,6 +55,7 @@ locals {
 # ============================================================================
 
 resource "aws_dynamodb_table" "transactions" {
+  #checkov:skip=CKV_AWS_119: AWS-owned encryption is sufficient for synthetic portfolio data; production would use a customer-managed key.
   name         = "${var.project_name}-transactions-${var.environment}"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "transaction_id"
@@ -113,6 +114,7 @@ resource "aws_dynamodb_table" "transactions" {
 }
 
 resource "aws_dynamodb_table" "fraud_alerts" {
+  #checkov:skip=CKV_AWS_119: AWS-owned encryption is sufficient for synthetic portfolio data; production would use a customer-managed key.
   name         = "${var.project_name}-fraud-alerts-${var.environment}"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "alert_id"
@@ -165,6 +167,7 @@ resource "aws_dynamodb_table" "fraud_alerts" {
 resource "aws_sqs_queue" "transaction_dlq" {
   name                      = "${var.project_name}-transactions-dlq-${var.environment}"
   message_retention_seconds = 1209600
+  sqs_managed_sse_enabled   = true
 
   tags = {
     Name = "${var.project_name}-transaction-dlq"
@@ -176,6 +179,7 @@ resource "aws_sqs_queue" "transaction_queue" {
   visibility_timeout_seconds = var.sqs_visibility_timeout
   message_retention_seconds  = 1209600
   receive_wait_time_seconds  = 20
+  sqs_managed_sse_enabled    = true
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.transaction_dlq.arn
@@ -190,6 +194,7 @@ resource "aws_sqs_queue" "transaction_queue" {
 resource "aws_sqs_queue" "fraud_alert_dlq" {
   name                      = "${var.project_name}-fraud-alerts-dlq-${var.environment}"
   message_retention_seconds = 1209600
+  sqs_managed_sse_enabled   = true
 
   tags = {
     Name = "${var.project_name}-fraud-alert-dlq"
@@ -201,6 +206,7 @@ resource "aws_sqs_queue" "fraud_alert_queue" {
   visibility_timeout_seconds = var.fraud_detector_timeout * 6
   message_retention_seconds  = 604800
   receive_wait_time_seconds  = 20
+  sqs_managed_sse_enabled    = true
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.fraud_alert_dlq.arn
@@ -217,7 +223,8 @@ resource "aws_sqs_queue" "fraud_alert_queue" {
 # ============================================================================
 
 resource "aws_sns_topic" "fraud_alerts" {
-  name = "${var.project_name}-fraud-alerts-${var.environment}"
+  name              = "${var.project_name}-fraud-alerts-${var.environment}"
+  kms_master_key_id = "alias/aws/sns"
 
   tags = {
     Name = "${var.project_name}-fraud-alerts-topic"
@@ -237,7 +244,12 @@ resource "aws_sns_topic_subscription" "fraud_alert_email" {
 # ============================================================================
 
 resource "aws_s3_bucket" "transaction_logs" {
-  bucket = "${var.project_name}-transaction-logs-${var.environment}-${data.aws_caller_identity.current.account_id}"
+  #checkov:skip=CKV_AWS_18: A dedicated access-log bucket is outside the single-stack portfolio scope; production would centralize access logs.
+  #checkov:skip=CKV_AWS_145: SSE-S3 protects synthetic audit data without customer-managed KMS key cost; production would use a CMK.
+  #checkov:skip=CKV_AWS_144: Cross-region replication adds cost and conflicts with the single-region portfolio boundary.
+  #checkov:skip=CKV2_AWS_62: This bucket is the terminal audit sink and has no S3-triggered downstream workflow.
+  bucket        = "${var.project_name}-transaction-logs-${var.environment}-${data.aws_caller_identity.current.account_id}"
+  force_destroy = var.environment != "production"
 
   tags = {
     Name = "${var.project_name}-transaction-logs"
@@ -267,7 +279,7 @@ resource "aws_s3_bucket_versioning" "transaction_logs" {
   bucket = aws_s3_bucket.transaction_logs.id
 
   versioning_configuration {
-    status = var.environment == "production" ? "Enabled" : "Suspended"
+    status = "Enabled"
   }
 }
 
@@ -287,6 +299,19 @@ resource "aws_s3_bucket_lifecycle_configuration" "transaction_logs" {
 
     expiration {
       days = var.s3_lifecycle_expiration_days
+    }
+
+    noncurrent_version_transition {
+      noncurrent_days = var.s3_lifecycle_glacier_days
+      storage_class   = "GLACIER"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = var.s3_lifecycle_expiration_days
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
     }
   }
 }
@@ -498,6 +523,8 @@ resource "aws_iam_role_policy_attachment" "api_handler_basic" {
 # ============================================================================
 
 resource "aws_cloudwatch_log_group" "transaction_processor" {
+  #checkov:skip=CKV_AWS_158: Logs contain synthetic identifiers only; production would encrypt log groups with a customer-managed key.
+  #checkov:skip=CKV_AWS_338: Thirty-day retention controls portfolio cost; production retention would follow compliance requirements.
   name              = "/aws/lambda/${var.project_name}-transaction-processor-${var.environment}"
   retention_in_days = var.log_retention_days
 
@@ -507,6 +534,8 @@ resource "aws_cloudwatch_log_group" "transaction_processor" {
 }
 
 resource "aws_cloudwatch_log_group" "fraud_detector" {
+  #checkov:skip=CKV_AWS_158: Logs contain synthetic identifiers only; production would encrypt log groups with a customer-managed key.
+  #checkov:skip=CKV_AWS_338: Thirty-day retention controls portfolio cost; production retention would follow compliance requirements.
   name              = "/aws/lambda/${var.project_name}-fraud-detector-${var.environment}"
   retention_in_days = var.log_retention_days
 
@@ -516,6 +545,8 @@ resource "aws_cloudwatch_log_group" "fraud_detector" {
 }
 
 resource "aws_cloudwatch_log_group" "api_handler" {
+  #checkov:skip=CKV_AWS_158: Logs contain synthetic identifiers only; production would encrypt log groups with a customer-managed key.
+  #checkov:skip=CKV_AWS_338: Thirty-day retention controls portfolio cost; production retention would follow compliance requirements.
   name              = "/aws/lambda/${var.project_name}-api-handler-${var.environment}"
   retention_in_days = var.log_retention_days
 
@@ -525,6 +556,8 @@ resource "aws_cloudwatch_log_group" "api_handler" {
 }
 
 resource "aws_cloudwatch_log_group" "api_gateway" {
+  #checkov:skip=CKV_AWS_158: Logs contain synthetic identifiers only; production would encrypt log groups with a customer-managed key.
+  #checkov:skip=CKV_AWS_338: Thirty-day retention controls portfolio cost; production retention would follow compliance requirements.
   name              = "/aws/apigateway/${var.project_name}-${var.environment}"
   retention_in_days = var.log_retention_days
 
@@ -560,6 +593,10 @@ data "archive_file" "api_handler" {
 # ============================================================================
 
 resource "aws_lambda_function" "transaction_processor" {
+  #checkov:skip=CKV_AWS_116: SQS redrive sends failed events to the transaction DLQ after retries.
+  #checkov:skip=CKV_AWS_173: Environment variables contain resource identifiers and non-secret configuration only.
+  #checkov:skip=CKV_AWS_272: CI validation and source hashes protect this portfolio package; production would add code signing.
+  #checkov:skip=CKV_AWS_117: The function uses managed AWS APIs and does not require private VPC resources.
   function_name                  = "${var.project_name}-transaction-processor-${var.environment}"
   role                           = aws_iam_role.transaction_processor_lambda.arn
   runtime                        = var.lambda_runtime
@@ -598,6 +635,10 @@ resource "aws_lambda_function" "transaction_processor" {
 }
 
 resource "aws_lambda_function" "fraud_detector" {
+  #checkov:skip=CKV_AWS_116: SQS redrive sends failed events to the fraud-alert DLQ after retries.
+  #checkov:skip=CKV_AWS_173: Environment variables contain resource identifiers and non-secret configuration only.
+  #checkov:skip=CKV_AWS_272: CI validation and source hashes protect this portfolio package; production would add code signing.
+  #checkov:skip=CKV_AWS_117: The function uses managed AWS APIs and does not require private VPC resources.
   function_name                  = "${var.project_name}-fraud-detector-${var.environment}"
   role                           = aws_iam_role.fraud_detector_lambda.arn
   runtime                        = var.lambda_runtime
@@ -632,6 +673,10 @@ resource "aws_lambda_function" "fraud_detector" {
 }
 
 resource "aws_lambda_function" "api_handler" {
+  #checkov:skip=CKV_AWS_116: API Gateway invokes this function synchronously, so asynchronous Lambda DLQ handling does not apply.
+  #checkov:skip=CKV_AWS_173: Environment variables contain resource identifiers and non-secret configuration only.
+  #checkov:skip=CKV_AWS_272: CI validation and source hashes protect this portfolio package; production would add code signing.
+  #checkov:skip=CKV_AWS_117: The function uses managed AWS APIs and does not require private VPC resources.
   function_name                  = "${var.project_name}-api-handler-${var.environment}"
   role                           = aws_iam_role.api_handler_lambda.arn
   runtime                        = var.lambda_runtime
@@ -707,39 +752,46 @@ resource "aws_apigatewayv2_integration" "api_handler" {
 }
 
 resource "aws_apigatewayv2_route" "health" {
-  api_id    = aws_apigatewayv2_api.monitoring_api.id
-  route_key = "GET /health"
-  target    = "integrations/${aws_apigatewayv2_integration.api_handler.id}"
+  #checkov:skip=CKV_AWS_309: The health endpoint intentionally exposes no transaction or alert data.
+  api_id             = aws_apigatewayv2_api.monitoring_api.id
+  route_key          = "GET /health"
+  authorization_type = "NONE"
+  target             = "integrations/${aws_apigatewayv2_integration.api_handler.id}"
 }
 
 resource "aws_apigatewayv2_route" "get_transaction" {
-  api_id    = aws_apigatewayv2_api.monitoring_api.id
-  route_key = "GET /transactions/{transaction_id}"
-  target    = "integrations/${aws_apigatewayv2_integration.api_handler.id}"
+  api_id             = aws_apigatewayv2_api.monitoring_api.id
+  route_key          = "GET /transactions/{transaction_id}"
+  authorization_type = "AWS_IAM"
+  target             = "integrations/${aws_apigatewayv2_integration.api_handler.id}"
 }
 
 resource "aws_apigatewayv2_route" "get_user_transactions" {
-  api_id    = aws_apigatewayv2_api.monitoring_api.id
-  route_key = "GET /transactions/user/{user_id}"
-  target    = "integrations/${aws_apigatewayv2_integration.api_handler.id}"
+  api_id             = aws_apigatewayv2_api.monitoring_api.id
+  route_key          = "GET /transactions/user/{user_id}"
+  authorization_type = "AWS_IAM"
+  target             = "integrations/${aws_apigatewayv2_integration.api_handler.id}"
 }
 
 resource "aws_apigatewayv2_route" "list_alerts" {
-  api_id    = aws_apigatewayv2_api.monitoring_api.id
-  route_key = "GET /alerts"
-  target    = "integrations/${aws_apigatewayv2_integration.api_handler.id}"
+  api_id             = aws_apigatewayv2_api.monitoring_api.id
+  route_key          = "GET /alerts"
+  authorization_type = "AWS_IAM"
+  target             = "integrations/${aws_apigatewayv2_integration.api_handler.id}"
 }
 
 resource "aws_apigatewayv2_route" "get_alert" {
-  api_id    = aws_apigatewayv2_api.monitoring_api.id
-  route_key = "GET /alerts/{alert_id}"
-  target    = "integrations/${aws_apigatewayv2_integration.api_handler.id}"
+  api_id             = aws_apigatewayv2_api.monitoring_api.id
+  route_key          = "GET /alerts/{alert_id}"
+  authorization_type = "AWS_IAM"
+  target             = "integrations/${aws_apigatewayv2_integration.api_handler.id}"
 }
 
 resource "aws_apigatewayv2_route" "update_alert_status" {
-  api_id    = aws_apigatewayv2_api.monitoring_api.id
-  route_key = "PATCH /alerts/{alert_id}/status"
-  target    = "integrations/${aws_apigatewayv2_integration.api_handler.id}"
+  api_id             = aws_apigatewayv2_api.monitoring_api.id
+  route_key          = "PATCH /alerts/{alert_id}/status"
+  authorization_type = "AWS_IAM"
+  target             = "integrations/${aws_apigatewayv2_integration.api_handler.id}"
 }
 
 resource "aws_apigatewayv2_stage" "default" {
